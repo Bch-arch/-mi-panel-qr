@@ -1,0 +1,86 @@
+Empiezo la implementación dentro del alcance autorizado. Antes de tocar código revisaré la guía local de esta versión de Next.js, como exige el repositorio; después haré cambios solo en los archivos aprobados y componentes auxiliares. La verificación de propiedad se hará tanto en la acción de servidor como con el filtro de usuario, dejando RLS como defensa adicional sin tocar su esquema.
+• Explored
+  └ List docs
+    Search Server Actions|useActionState|redirect\(|Route Handlers in docs
+    Read forms.md
+• Edited app/actions/qr.ts (+53 -4)
+-export async function toggleQrStatus(formData: FormData): Promise<void> {
++export type QrMutationState = {
++  ok: boolean;
+• Edited 2 files (+83 -0)
+  └ components/qr-delete-button.tsx (+38 -0)
++"use client";
++
++import { useActionState, type FormEvent } from "react";
+
+  └ components/qr-status-button.tsx (+45 -0)
++"use client";
++
++import { useActionState } from "react";
+• Edited components/qr-table.tsx (+10 -23)
+-import { toggleQrStatus } from "@/app/actions/qr";
++import QrDeleteButton from "@/components/qr-delete-button";
++import QrStatusButton from "@/components/qr-status-button";
+• Edited 2 files (+15 -2)
+  └ app/api/qr/[id]/download/route.ts (+1 -0)
++    .eq("user_id", user.id)
+
+  └ app/auth/callback/route.ts (+14 -2)
+-  const next = searchParams.get("next") ?? "/";
++  const requestedNext = searchParams.get("next");
++
+La eliminación ya se ejecuta en una Server Action que vuelve a validar la sesión y filtra por id y user_id; RLS sigue como capa adicional. También añadí confirmación, mensajes de error y límites de acción pendiente en ambas vistas, además de endurecer el callback y la descarga. Ahora revisaré los cambios y ejecutaré lint y build; después comprobaré escritorio/móvil mediante inspección de renderizado disponible en el entorno.
+• Edited docs/PROJECT_CONTEXT.md (+6 -5)
++- Eliminación de QR propios desde el listado, con confirmación en escritorio y móvil.
+    ⋮
+-- Eliminación de QR.
+• Ran npm run lint
+  └ > mi-panel-qr@0.1.0 lint
+    > eslint
+    
+• Exited (status 1) npm ls --depth=0 2>/dev/null; command -v chromium || command -v chromium-browser || command -v google-chrome || true; test -d node_modules/playwright && ech…
+  └ ├── tailwindcss@4.3.3
+    └── typescript@5.9.3
+    
+• Exited (status 1) npm run build
+  └ 
+    
+        at ignore-listed frames
+npm run lint pasó. npm run build llegó a la compilación, pero se detuvo porque Next.js no pudo descargar Geist desde Google Fonts debido a la conectividad del entorno. No cambiaré la estrategia de fuentes por ese fallo. No hay Playwright ni navegador instalado aquí, así que la comprobación visual real tiene esa limitación; sí puedo comprobar tipos y revisar las dos ramas responsive del componente.
+• Ran npx tsc --noEmit
+  └ (no output)
+• Ran sed -n '1,260p' components/qr-table.tsx; sed -n '1,220p' components/qr-delete-button.tsx; sed -n '1,220p' components/qr-status-button.tsx; sed -n '1,260p' app/actions/qr.…
+  └ total 4
+    dr-xr-xr-x  2 bruno_checa bruno_checa   40 Nov 12 01:16 .
+    drwxr-xr-x 14 bruno_checa bruno_checa 4096 Nov 12 01:16 ..
+• Edited docs/PROJECT_CONTEXT.md (+1 -1)
+-La documentación se preparó mediante lectura del repositorio y se actualizó tras implementar eliminación de QR con control por propietario, validación del callback, filtro de propietario en descargas y mensajes de error para cambios de estado. No se modificó el esquema SQL, no se ejecutó SQL ni se consultó el proyecto remoto de Supabase. La verificación de políticas RLS remotas queda pendiente. “Implementado” significa presente en el código; los resultados de lint/build se deben registrar al verific
+• Explored
+  └ Read qr.ts, qr-delete-button.tsx, qr-status-button.tsx, qr-table.tsx, route.ts, PROJECT_CONTEXT.md
+• Edited docs/PROJECT_CONTEXT.md (+1 -1)
+-- ¿El sistema deberá permitir borrar QR y qué sucede con sus enlaces públicos?
++- La eliminación está implementada: borra definitivamente la fila y el enlace público deja de resolver. No existe recuperación; definir retención/soft delete solo si aparece una necesidad concreta.
+## Fase 1 implementada
+
+Añadí eliminación de QR con confirmación en las vistas de escritorio y móvil. La acción requiere una sesión y limita la eliminación a filas cuyo id y user_id coinciden con el usuario autenticado. El esquema SQL y las políticas RLS no se modificaron.
+
+También validé la ruta next del callback, añadí filtro de propietario a las descargas y mensajes de error para cambios de estado. Actualicé el contexto técnico del proyecto.
+
+### Archivos modificados
+
+- app/actions/qr.ts (app/actions/qr.ts:169)
+- components/qr-table.tsx (components/qr-table.tsx:35)
+- components/qr-delete-button.tsx (components/qr-delete-button.tsx:1) — nuevo
+- components/qr-status-button.tsx (components/qr-status-button.tsx:1) — nuevo
+- app/auth/callback/route.ts (app/auth/callback/route.ts:4)
+- app/api/qr/[id]/download/route.ts (app/api/qr/[id]/download/route.ts:26)
+- docs/PROJECT_CONTEXT.md (docs/PROJECT_CONTEXT.md:208)
+
+### Comprobaciones
+
+- npm run lint: correcto.
+- npx tsc --noEmit: correcto.
+- npm run build: bloqueado porque Next.js no pudo descargar Geist desde Google Fonts en este entorno.
+- Revisé las ramas responsive del listado: tabla de escritorio (md:table) y tarjetas móviles (md:hidden, acciones con ajuste de línea). No había navegador ni Playwright instalados para hacer una comprobación visual interactiva.
+
+La propiedad se comprueba en el código mediante sesión obligatoria y filtro user_id; no pude validar el comportamiento integrado contra Supabase. Queda pendiente confirmar que la política RLS de eliminación del esquema ya está aplicada en la instancia remota. No ejecuté SQL ni migraciones.
