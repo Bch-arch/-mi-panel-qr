@@ -1,0 +1,302 @@
+Primero voy a mapear rutas, acciones, esquema y políticas RLS existentes, además de cómo se construye y valida actualmente cada URL pública. Antes de tocar cualquier SQL o datos, te presentaré el cambio de esquema y el plan de preservación; luego avanzaré con la implementación en la aplicación y las comprobaciones solicitadas.
+• Ran git status --short --branch && rg --files -g '!node_modules' -g '!.next' -g '!package-lock.json' | sort && rg -n "create table|policy|create policy|qr_codes|employees|red…
+  └ app/(auth)/registro/page.tsx:4:  redirect("/login?error=registration-closed");
+    app/(panel)/editar/[id]/page.tsx:68:            {formatNumber(qr.scans)} escaneos · creado el {formatDate(qr.createdAt)}
+    app/(panel)/editar/[id]/page.tsx:89:            /r/{qr.code}
+• Ran cat AGENTS.md && sed -n '1,180p' supabase/schema.sql && sed -n '1,270p' app/actions/qr.ts && sed -n '1,130p' lib/data.ts && sed -n '1,190p' lib/qr-types.ts && sed -n '1,1…
+  └   const adminId = getConfiguredAdminId();
+      return adminId !== null && userId.toLowerCase() === adminId;
+    }
+• Exited (status 2) sed -n '1,250p' 'app/(panel)/layout.tsx' && sed -n '1,220p' components/panel-sidebar.tsx && sed -n '1,200p' 'app/(panel)/page.tsx' && sed -n '1,230p' compon…
+  └ /bin/bash: -c: line 1: syntax error near unexpected token `('
+    /bin/bash: -c: line 1: `sed -n '1,250p' 'app/(panel)/layout.tsx' && sed -n '1,220p' components/panel-sidebar.tsx && sed -n '1,200p' 'app/(panel)/page.tsx' && sed -n '1,230p…
+• Explored
+  └ Read layout.tsx, panel-sidebar.tsx, page.tsx, qr-table.tsx, qr-create-form.tsx, qr-edit-form.tsx, package.json, .env.example, PROJECT_CONTEXT.md
+La arquitectura actual tiene una sola tabla qr_codes, códigos únicos por restricción SQL, resolve_qr() para redirecciones públicas y políticas RLS por user_id. El panel exige además la cuenta administradora en servidor. employees no aparece en el esquema revisado. destination hoy es obligatorio, así que un QR pendiente no se puede representar limpiamente sin un cambio aditivo.
+
+SQL que hace falta: añadir una tabla qr_batches; sumar a qr_codes referencias de lote/unidad, tienda y estado de inventario; permitir destination = NULL solo para QR disponibles; y agregar una RPC transaccional que cree el lote y todos sus códigos usando la sesión autenticada. Se conserva la unicidad actual de code, y se añade unicidad por lote/unidad. Las filas existentes conservarían sus IDs, códigos, destinos, estados, escaneos y fechas; el nuevo estado tendría un valor predeterminado de “asignado”. Las políticas actuales no se relajan, y las nuevas tablas/RPC no darían acceso a anon. No se toca employees.
+
+No tengo acceso a la instancia remota de Supabase y no ejecutaré SQL allí. Incluiré una migración versionada para revisión/aplicación explícita; hasta aplicarla, las nuevas pantallas y acciones no podrán consultar las columnas nuevas. Ahora implementaré el flujo en el código.
+• Ran npm ls @zxing/browser fflate jszip --depth=2 || true; sed -n '1,145p' components/qr-edit-form.tsx; sed -n '1,130p' 'app/(panel)/crear/page.tsx'; sed -n '1,130p' 'app/(pan…
+  └   // ...
+    }
+    ```
+• Exited (status 130) npm install @zxing/browser fflate
+  └ (no output)
+El catálogo local no contiene una biblioteca para leer QR desde cámara ni para empaquetar ZIP. La instalación quedó bloqueada por acceso de red del sandbox; volveré a ejecutarla con permisos de red para poder implementar lectura móvil robusta y descarga ZIP real.
+You approved codex to run npm install @zxing/browser fflate this time
+• Ran npm install @zxing/browser fflate
+  └   npm audit fix --force
+    
+    Run `npm audit` for details.
+• Ran cat package.json && npm ls @zxing/browser @zxing/library fflate --depth=2 && node -e 'console.log(require("@zxing/browser/package.json"))' | head -c 700
+  └   module: './esm/index.js',
+      typings: './esm/index.d.ts',
+      esnext: './es2015/i
+You approved codex to run npm install @zxing/browser@0.1.5 this time
+• Ran npm install @zxing/browser@0.1.5
+  └   npm audit fix --force
+    
+    Run `npm audit` for details.
+• Exited (status 1) npm view @zxing/browser@0.1.5 version dependencies engines && npm view @zxing/library@0.21.3 version engines
+  └ npm error request to https://registry.npmjs.org/@zxing%2fbrowser failed, reason: getaddrinfo EAI_AGAIN registry.npmjs.org
+    npm error Log files were not written due to an error writing to the directory: /home/bruno_checa/.npm/_logs
+    npm error You can rerun the command with `--loglevel=verbose` to see the logs in your terminal
+• Added supabase/migrations/202611120001_qr_inventory_batches.sql (+161 -0)
++-- Inventario de QR imprimibles. Migración aditiva: conserva los QR actuales
++-- y no toca public.employees ni elimina registros.
++
+• Edited lib/qr-types.ts (+14 -1)
+-  destination: string;
++  destination: string | null;
+   ⋮
+• Explored
+  └ Read data.ts
+• Edited lib/data.ts (+56 -4)
+-import type { QrCode, QrStatus } from "@/lib/qr-types";
++import type { QrBatch, QrCode, QrInventoryStatus, QrStatus } from "@/lib/qr-types";
+    ⋮
+• Explored
+  └ Search QrCode|destination in app
+• Edited lib/qr-public-url.ts (+36 -0)
++
++// Los códigos de una tirada física quedan impresos y no se pueden corregir.
++// Exigimos un origen de producción HTTPS explícito incluso al ejecutar en dev.
+• Edited app/actions/qr.ts (+125 -0)
++import { getPrintQrUrl, QrPublicUrlConfigurationError } from "@/lib/qr-public-url";
+    ⋮
++export type CreateQrBatchState = {
+• Ran cat node_modules/@zxing/browser/package.json | head -40; rg -n "decodeFromVideoDevice|interface IScannerControls|class BrowserMultiFormatReader" node_modules/@zxing/brows…
+  └ node_modules/@zxing/browser/cjs/readers/BrowserMultiFormatReader.d.ts:4:export declare class BrowserMultiFormatReader extends BrowserCodeReader {
+    node_modules/@zxing/browser/esm/common/IScannerControls.d.ts:1:export interface IScannerControls {
+    0.21.3 { node: '>= 10.4.0' }
+• Explored
+  └ Read IScannerControls.d.ts, index.d.ts, BrowserMultiFormatReader.d.ts
+• Added components/qr-batch-form.tsx (+76 -0)
++"use client";
++
++import { useActionState } from "react";
+• Added components/qr-camera-scanner.tsx (+89 -0)
++"use client";
++
++import { useEffect, useRef, useState } from "react";
+• Added components/qr-inventory-manager.tsx (+158 -0)
++"use client";
++
++import { useActionState, useMemo, useState } from "react";
+• Added app/(panel)/inventario/page.tsx (+37 -0)
++import { Suspense } from "react";
++import { connection } from "next/server";
++import QrInventoryManager from "@/components/qr-inventory-manager";
+• Edited components/panel-sidebar.tsx (+10 -0)
++function InventoryIcon({ className }: IconProps) {
++  return (
++    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className={className} aria-hidden="true">
+• Added lib/qr-batch-export.ts (+51 -0)
++import "server-only";
++import { isAdminUserId } from "@/lib/admin";
++import { createClient } from "@/lib/supabase/server";
+• Added app/api/qr-batches/[id]/csv/route.ts (+45 -0)
++import { NextResponse, type NextRequest } from "next/server";
++import { getPrintQrUrl, QrPublicUrlConfigurationError } from "@/lib/qr-public-url";
++import { loadAuthorizedBatch } from "@/lib/qr-batch-export";
+• Added app/api/qr-batches/[id]/download/route.ts (+60 -0)
++import { zipSync } from "fflate";
++import { NextResponse, type NextRequest } from "next/server";
++import QRCode from "qrcode";
+• Edited components/qr-table.tsx (+4 -4)
+-                <span className="block truncate text-zinc-600 dark:text-zinc-400" title={qr.destination}>
+-                  {qr.destination}
++                <span className="block truncate text-zinc-600 dark:text-zinc-400" title={qr.destination ?? "Pendiente de asignación"}>
+• Edited components/qr-edit-form.tsx (+1 -1)
+-          defaultValue={qr.destination}
++          defaultValue={qr.destination ?? ""}
+• Edited app/actions/qr.ts (+1 -0)
++    ...(nextStatus === "activo" ? { eq: "asignado" } : {})
+• Edited app/actions/qr.ts (+6 -5)
+-  const { data, error } = await supabase
++  let updateQuery = supabase
+    ⋮
+• Explored
+  └ Read qr.ts
+    Search decodeFromConstraints|decodeFromVideoDevice in BrowserCodeReader.d.ts
+    Read BrowserCodeReader.d.ts
+• Edited app/actions/qr.ts (+22 -0)
++  const storeName = String(formData.get("storeName") ?? "").trim();
+    ⋮
++  if (storeName.length > 120) {
+• Explored
+  └ Read qr.ts, qr-edit-form.tsx
+• Edited app/actions/qr.ts (+3 -1)
++    storeName?: string;
+    ⋮
+-  if (errors.name || errors.destination) {
+• Explored
+  └ Read qr.ts
+    Read qr.ts
+    Search Object.keys\(errors\)|revalidatePath\("/inventario"\) in qr.ts
+• Edited app/actions/qr.ts (+1 -1)
+-    storeName?: string;
+    ⋮
++    storeName?: string;
+• Edited components/qr-edit-form.tsx (+18 -0)
++        <label htmlFor="storeName" className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
++          Tienda asignada (opcional)
++        </label>
+• Edited components/qr-table.tsx (+14 -6)
+-      <QrStatusButton id={qr.id} isActive={isActive} className={actionLink} />
++      {qr.inventoryStatus === "disponible" ? (
++        <span className="px-2 text-xs text-zinc-500">Sin asignar</span>
+• Edited supabase/schema.sql (+4 -2)
+--- Esquema y seguridad para la etapa 1 (auth + persistencia multiusuario).
+--- Ejecutar en Supabase -> SQL Editor. Es idempotente: se puede reejecutar.
++-- Esquema base y seguridad (auth + persistencia multiusuario).
+• Added docs/QR_INVENTORY.md (+23 -0)
++# Inventario de QR por lotes
++
++## Cambios SQL
+• Edited supabase/migrations/202611120001_qr_inventory_batches.sql (+7 -2)
+-        inventory_status <> 'disponible'
+-        or (destination is null and store_name is null and status = 'borrador')
++        (inventory_status = 'disponible'
+La primera parte del flujo ya está conectada: el lote se crea en una sola llamada SQL transaccional, los QR quedan como disponibles sin destino, y el escaneo/las exportaciones requieren la sesión administradora. Ahora voy a pasar TypeScript y ESLint para detectar incompatibilidades de la integración antes de completar el repaso del SQL y correr build.
+• Exited (status 2) npx tsc --noEmit
+  └   Property 'units' does not exist on type '{ kind: "error" | "unauthenticated" | "forbidden" | "not-found"; }'.
+    app/api/qr-batches/[id]/download/route.ts(50,72): error TS2339: Property 'batch' does not exist on type 'BatchExportResult'.
+      Property 'batch' does not exist on type '{ kind: "error" | "unauthenticated" | "forbidden" | "not-found"; }'.
+• Exited (status 1) npm run lint
+  └ 
+    ✖ 1 problem (1 error, 0 warnings)
+    
+• Edited app/api/qr-batches/[id]/csv/route.ts (+1 -1)
+-  if (result.kind === "error") return NextResponse.json({ error: "No se pudo preparar el CSV" }, { status: 500 });
++  if (result.kind !== "ok") return NextResponse.json({ error: "No se pudo preparar el CSV" }, { status: 500 });
+• Edited app/api/qr-batches/[id]/download/route.ts (+1 -1)
+-  if (result.kind === "error") return NextResponse.json({ error: "No se pudo preparar el lote" }, { status: 500 });
++  if (result.kind !== "ok") return NextResponse.json({ error: "No se pudo preparar el lote" }, { status: 500 });
+• Edited components/qr-inventory-manager.tsx (+8 -9)
+-import { useActionState, useMemo, useState } from "react";
++import { useActionState, useState } from "react";
+   ⋮
+• Ran npx tsc --noEmit
+  └ (no output)
+• Ran npm run lint
+  └ > mi-panel-qr@0.1.0 lint
+    > eslint
+    
+• Ran npm run build
+  └ ◐  (Partial Prerender)  prerendered as static HTML with dynamic server-streamed content
+    ƒ  (Dynamic)            server-rendered on demand
+    
+• Edited app/actions/qr.ts (+16 -0)
++  const { data: existing, error: lookupError } = await supabase
++    .from("qr_codes")
++    .select("batch_id")
+• Explored
+  └ Read qr.ts
+    Search Las unidades de un lote in qr.ts
+• Edited components/qr-table.tsx (+2 -2)
+-      <QrDeleteButton id={qr.id} className={actionLink} />
++      {qr.batchId ? <span className="px-2 text-xs text-zinc-500">Unidad de lote</span> : <QrDeleteButton id={qr.id} className={actionLink} />}
+    ⋮
+• Edited supabase/migrations/202611120001_qr_inventory_batches.sql (+13 -1)
+-  created_at timestamptz not null default now()
++  created_at timestamptz not null default now(),
++  unique (id, user_id)
+• Edited supabase/migrations/202611120001_qr_inventory_batches.sql (+4 -2)
+-  created_at timestamptz not null default now(),
+-  unique (id, user_id)
++  created_at timestamptz not null default now()
+• Edited supabase/migrations/202611120001_qr_inventory_batches.sql (+0 -10)
+-    where conname = 'qr_codes_batch_id_fkey'
+-      and conrelid = 'public.qr_codes'::regclass
+-  ) then
+• Explored
+  └ Read proxy.ts, qr-edit-form.tsx, qr.ts, 202611120001_qr_inventory_batches.sql
+• Ran head -20 node_modules/@zxing/browser/esm/index.js && head -40 node_modules/@zxing/browser/esm/readers/BrowserCodeReader.js && rg -n "window\.|document\.|navigator\." node…
+  └ node_modules/@zxing/browser/esm/readers/BrowserCodeReader.js:305:        var canvasElement = document.createElement('canvas');
+    node_modules/@zxing/browser/esm/readers/BrowserCodeReader.js:394:                        return [4 /*yield*/, navigator.mediaDevices.enumerateDevices()];
+    node_modules/@zxing/browser/esm/readers/BrowserCodeReader.js:1183:                    case 0: return [4 /*yield*/, navigator.mediaDevices.getUserMedia(constraints)];
+• Edited .env.example (+3 -3)
+-# Origen público codificado dentro de los QR. En desarrollo puede ser
+-# http://localhost:3000 o una URL accesible desde el teléfono. En producción
+-# debe ser HTTPS y no puede apuntar a localhost ni a una dirección privada.
+• Edited components/qr-batch-form.tsx (+6 -6)
+-export default function QrBatchForm() {
++export default function QrBatchForm({ remainingCapacity }: { remainingCapacity: number }) {
+   ⋮
+• Edited components/qr-inventory-manager.tsx (+1 -1)
+-        <QrBatchForm />
++        <QrBatchForm remainingCapacity={Math.max(0, 50 - items.length)} />
+El flujo de inventario ya cubre lotes de hasta el límite vigente de 50 QR por cuenta, con una URL distinta por código; crea las unidades como borrador sin destino, y no activa la redirección hasta asignarlas. También protegí la integridad de los archivos del lote: una unidad generada por lote no se puede borrar individualmente y dejar incompletos el ZIP/CSV. Voy a repetir las tres comprobaciones con todos los cambios.
+• Ran npm run lint
+  └ > mi-panel-qr@0.1.0 lint
+    > eslint
+    
+• Ran npx tsc --noEmit
+  └ (no output)
+• Ran npm run build
+  └ ◐  (Partial Prerender)  prerendered as static HTML with dynamic server-streamed content
+    ƒ  (Dynamic)            server-rendered on demand
+    
+• Edited components/qr-camera-scanner.tsx (+2 -2)
+-import { BrowserMultiFormatReader, type IScannerControls } from "@zxing/browser";
++import { BrowserQRCodeReader, type IScannerControls } from "@zxing/browser";
+   ⋮
+• Ran npx tsc --noEmit
+  └ (no output)
+• Ran npm run lint
+  └ > mi-panel-qr@0.1.0 lint
+    > eslint
+    
+• Ran npm run build
+  └ ◐  (Partial Prerender)  prerendered as static HTML with dynamic server-streamed content
+    ƒ  (Dynamic)            server-rendered on demand
+    
+• Edited supabase/migrations/202611120001_qr_inventory_batches.sql (+6 -0)
++-- Conserva la acción de borrado para QR antiguos/individuales, pero no permite
++-- romper el contenido de un lote borrando una de sus unidades por REST.
++drop policy if exists "own delete" on public.qr_codes;
+• Edited docs/QR_INVENTORY.md (+1 -0)
++- Ajusta la política de borrado de `qr_codes` para que QR individuales existentes sigan siendo eliminables, mientras una unidad de lote no pueda borrarse y dejar incompleto su paquete de impresión.
+• Edited docs/QR_INVENTORY.md (+2 -2)
+-- Habilita RLS en `qr_batches`; las políticas nuevas limitan lectura e inserción al propietario autenticado. No sustituye ni debilita las políticas existentes de `qr_codes`.
+-- Ajusta la política de borrado de `qr_codes` para que QR individuales existentes sigan siendo eliminables, mientras una unidad de lote no pueda borrarse y dejar incompl
+• Exited (status 2) git diff --check && git status --short --branch && git diff --stat && git diff -- app/(panel)/inventario/page.tsx components/qr-batch-form.tsx components/qr…
+  └ /bin/bash: -c: line 1: syntax error near unexpected token `('
+    /bin/bash: -c: line 1: `git diff --check && git status --short --branch && git diff --stat && git diff -- app/(panel)/inventario/page.tsx components/qr-batch-form.tsx compo…
+• Ran git diff --check && git status --short --branch && git diff --stat && rg --files app components lib supabase docs -g '!node_modules' | sort | rg 'inventario|qr-batch|qr-i…
+  └     "typescript": "^5"
+      }
+    }
+Implementé el sistema en la aplicación y preparé la migración SQL. No ejecuté SQL en Supabase: la sección nueva requiere aplicar primero la migración.
+
+### Funciones añadidas
+
+- Crear lotes de 1 a 50 unidades. Cada unidad obtiene un código aleatorio único; la restricción existente UNIQUE(code) y una RPC transaccional protegen contra duplicados y lotes incompletos.
+- Descargar cada lote como ZIP de SVG vectoriales o PNG de 1600 px, y como CSV con número de unidad, UUID, identificador y URL pública.
+- Consultar el inventario disponible, asignado e activo; escanear un sticker con la cámara; y asignar tienda, destino y estado desde el panel.
+- Mantener el enlace impreso al cambiar el destino. La generación y exportación de stickers exige un QR_PUBLIC_BASE_URL HTTPS público: no produce URLs localhost.
+- Restringir las nuevas acciones y exportaciones a la cuenta administradora. La migración no concede acceso a anon; además, impide borrar unidades de un lote, pero conserva el borrado de QR individuales.
+
+Se conserva el límite actual de 50 QR por cuenta, contando también los registros existentes.
+
+### SQL y preservación
+
+La migración 202611120001_qr_inventory_batches.sql (supabase/migrations/202611120001_qr_inventory_batches.sql) crea qr_batches y agrega campos de lote, unidad, tienda e inventario a qr_codes. destination solo puede quedar vacío para una unidad disponible; los QR existentes reciben el nuevo estado predeterminado “asignado”.
+
+El cambio conserva IDs, códigos, destinos, estados, escaneos y fechas existentes. No modifica employees ni elimina filas. Para una base existente, revisa y aplica solo la migración nueva; en una instalación nueva, ejecuta primero supabase/schema.sql y luego las migraciones. Dejé el procedimiento en QR_INVENTORY.md (docs/QR_INVENTORY.md). No verifiqué la instancia remota de Supabase.
+
+### Archivos principales
+
+- Panel e interfaz: inventario/page.tsx (app/(panel)/inventario/page.tsx), qr-inventory-manager.tsx (components/qr-inventory-manager.tsx), qr-batch-form.tsx (components/qr-batch-form.tsx), qr-camera-scanner.tsx (components/qr-camera-scanner.tsx), panel-sidebar.tsx (components/panel-sidebar.tsx).
+- Acciones, datos y exportación: qr.ts (app/actions/qr.ts), data.ts (lib/data.ts), qr-batch-export.ts (lib/qr-batch-export.ts), rutas de ZIP (app/api/qr-batches/[id]/download/route.ts) y CSV (app/api/qr-batches/[id]/csv/route.ts).
+- Tipos y compatibilidad: qr-types.ts, qr-public-url.ts, qr-edit-form.tsx, qr-table.tsx, package.json y package-lock.json.
+
+### Comprobaciones
+
+- npx tsc --noEmit: correcto.
+- npm run lint: correcto.
+- npm run build: correcto; Next generó la ruta /inventario y ambas rutas de exportación.
+
+Las comprobaciones validan el código, pero no sustituyen aplicar la migración ni probar la cámara y las consultas contra el proyecto Supabase real. No incluí en los cambios los otros archivos que ya aparecían modificados o ausentes en el estado previo de Git.
