@@ -1,0 +1,62 @@
+Haré la revisión del checkout y de la configuración sin mostrar valores de entorno. Intentaré verificar sincronización con GitHub usando los metadatos disponibles; si este workspace sigue sin remoto verificable, lo indicaré en vez de asumir que está actualizado. Para recomendar alojamiento comercial consultaré las condiciones y documentación oficiales vigentes.
+• Explored
+  └ Read admin.ts
+    Read auth.ts
+    Read proxy.ts
+• Ran python3 - <<'PY' …
+  └ git_worktree=false
+• Ran node -e 'const {loadEnvConfig}=require("@next/env");loadEnvConfig(process.cwd());const {isIP}=require("node:net");const names=["NEXT_PUBLIC_SUPABASE_URL","NEXT_PUBLIC_SUP…
+  └ {"variables":{"NEXT_PUBLIC_SUPABASE_URL":true,"NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY":true,"ADMIN_USER_ID":true,"QR_PUBLIC_BASE_URL":true},"supabaseUrlHttps":true,"adminUuid…
+• Explored
+  └ Read qr-public-url.ts
+    Read .gitignore
+    Read .env.example
+• Browsing the web
+• Searched the web for site:vercel.com/docs Hobby commercial use Pro commercial plan pricing Vercel terms, site:vercel.com/docs/frameworks/nextjs Next.js deployment environment…
+• Browsing the web
+• Searched the web for site:vercel.com/docs/frameworks/nextjs deploy Next.js project Git repository Vercel Functions, site:vercel.com/docs/environment-variables configuring env…
+• Browsing the web
+• Searched the web for site:vercel.com/docs/frameworks/nextjs Next.js framework preset Vercel deployment automatic, site:vercel.com/docs/functions runtimes Next.js Route Handle…
+## Resultado de la auditoría
+
+No puedo confirmar que el checkout esté sincronizado con GitHub. En este workspace no hay un repositorio Git utilizable ni un remoto, y no tengo una conexión GitHub disponible para comparar commits. Tampoco puedo comprobar el historial publicado ni certificar que nunca se hayan subido secretos.
+
+En el código revisado, la protección administrativa está aplicada en el proxy y en requireAdmin(), que validan la sesión con auth.getUser() y comparan el UUID con ADMIN_USER_ID. Las cuatro Server Actions de QR exigen requireAdmin(); la descarga comprueba además el administrador y filtra por propietario. /r/[slug] permanece pública por diseño y llama a resolve_qr.
+
+Las variables están presentes en el entorno local, y la URL de Supabase usa HTTPS. No mostré sus valores. Pero QR_PUBLIC_BASE_URL apunta actualmente a un host local y usa HTTP: no sirve para escanear desde datos móviles y el validador de producción la rechazará. Hay que asignarle el origen HTTPS estable del despliegue.
+
+El escaneo local de archivos no encontró literales que parezcan claves service_role, JWT o claves privadas. .gitignore excluye .env* y permite .env.example; sin GitHub no puedo verificar si .env.local está o estuvo en el historial remoto.
+
+No se necesitan cambios destructivos en Supabase para publicar el código actual, según la estructura ya confirmada en esta conversación. No ejecutes supabase/schema.sql como paso de despliegue: contiene instrucciones que eliminan y recrean políticas y reemplazan la función. La ruta pública seguirá necesitando que Supabase permita al rol anon ejecutar resolve_qr(text).
+
+Tampoco pude comprobar la configuración remota de Supabase Auth. Antes de publicar, confirma el Site URL y las Redirect URLs. Supabase recomienda usar el origen de producción como Site URL y permitir explícitamente la URL de callback; para producción, conviene usar la ruta exacta /auth/callback en vez de un patrón amplio. Guía oficial de redirect URLs de Supabase (https://supabase.com/docs/guides/auth/redirect-urls)
+
+## Alojamiento recomendado
+
+Recomiendo Vercel Pro para el sitio Next.js. Vercel detecta Next.js y ofrece despliegue compatible con sus rutas y funciones de servidor. Next.js en Vercel (https://vercel.com/frameworks/nextjs), Vercel Functions (https://vercel.com/docs/functions)
+
+No uses Vercel Hobby para una operación comercial: sus condiciones lo restringen al uso personal o no comercial. Vercel indica que el uso comercial requiere Pro o Enterprise. Su página publica Pro a USD 20/mes, con crédito de uso incluido y cargos adicionales según consumo; confirma el precio vigente antes de contratar. Términos de Vercel (https://vercel.com/legal/terms), Fair Use de Vercel (https://vercel.com/docs/limits/fair-use-guidelines), Precios de Vercel (https://vercel.com/pricing)
+
+## Variables para producción
+
+Configura estas variables en el entorno Production de Vercel:
+
+- NEXT_PUBLIC_SUPABASE_URL
+- NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY — está diseñada para ser pública.
+- ADMIN_USER_ID — UUID de la cuenta autorizada; mantener solo en servidor.
+- QR_PUBLIC_BASE_URL — origen HTTPS público estable, sin ruta ni parámetros. Usa el dominio estable que Vercel asigne al proyecto cuando lo importes; no hace falta inventar uno ahora.
+
+Vercel aplica las variables a nuevas compilaciones o despliegues, así que hay que redeplegar al cambiarlas. Documentación de variables de entorno de Vercel (https://vercel.com/docs/environment-variables)
+
+No se necesita una clave service_role para las rutas actuales.
+
+## Pasos concretos para publicar
+
+1. En tu checkout real, verifica el remoto, la rama y el commit frente a GitHub; este workspace no me permitió comprobarlo.
+2. Importa el repositorio de GitHub en Vercel. Usa el preset Next.js detectado, npm ci para instalar y npm run build como comando de build.
+3. Configura las cuatro variables de producción con el proyecto Supabase existente y el origen HTTPS estable de Vercel.
+4. En Supabase Auth, establece el Site URL a ese origen y añade la URL exacta /auth/callback a Redirect URLs. Supabase permite desactivar nuevas altas sin impedir que usuarios existentes inicien sesión; si mantienes una sola cuenta, desactiva el registro público allí también. Configuración general de Supabase Auth (https://supabase.com/docs/guides/auth/general-configuration)
+5. Publica cuando autorices el despliegue. Luego prueba inicio de sesión admin, rechazo de otra cuenta, descarga PNG/SVG y resolución de un QR desde un iPhone usando datos móviles.
+6. Antes de cambiar el origen usado por los QR, decide si conservarás el dominio estable de Vercel o conectarás un dominio propio: los QR ya impresos conservarán la URL que se codificó originalmente.
+
+No desplegué ni modifiqué datos, tablas o políticas de Supabase.
