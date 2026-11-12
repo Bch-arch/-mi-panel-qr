@@ -1,0 +1,85 @@
+Voy a analizar cada sentencia y su alcance, incluyendo el efecto de DROP POLICY y SECURITY DEFINER. Me basaré en el archivo local y en el estado del proyecto que confirmaste; no consultaré ni cambiaré Supabase.
+• Explored
+  └ Read schema.sql
+## Análisis línea por línea
+
+### Líneas 1–4: comentarios
+
+Describen el archivo como esquema de etapa 1 y dicen que se puede ejecutar desde el SQL Editor. Que el archivo exista en el repositorio no significa que se haya aplicado en Supabase.
+
+La afirmación “idempotente” requiere matiz: el script tolera algunos objetos ya existentes, pero también reemplaza políticas y una función bajo ciertas condiciones.
+
+### Líneas 5–16: tabla public.qr_codes
+
+- Línea 5: crea public.qr_codes si no existe. Si existiera una tabla con ese nombre pero con columnas distintas, IF NOT EXISTS no la corregiría ni validaría que coincida con lo que espera la aplicación.
+- Línea 6: define id como UUID, clave primaria y generado por defecto.
+- Línea 7: define user_id como obligatorio, usa el usuario autenticado por defecto y lo relaciona con auth.users. Al borrar un usuario de Auth, ON DELETE CASCADE también borraría sus QR.
+- Líneas 8–10: definen nombre, destino y código; este último es único globalmente dentro de la tabla.
+- Líneas 11–12: establecen el estado inicial activo y limitan los valores permitidos.
+- Línea 13: inicializa el contador de escaneos en cero.
+- Líneas 14–15: registran fechas de creación y actualización. El SQL no crea un trigger automático para updated_at; la aplicación lo actualiza en algunos cambios.
+- Línea 16: cierra la definición de la tabla.
+
+### Líneas 18–21: índice y RLS
+
+- Línea 18: crea un índice para user_id si no existe uno con ese nombre. No altera employees; si ya hubiera un objeto distinto con ese nombre dentro de public, podría producirse una colisión o el índice esperado podría no quedar creado.
+- Línea 21: activa RLS en public.qr_codes.
+
+### Líneas 23–38: políticas
+
+- Líneas 23–26: eliminan, si existen, las políticas llamadas own select, own insert, own update y own delete de public.qr_codes. Si alguna tuviera una condición personalizada, esa condición se perdería y se reemplazaría abajo. No se eliminan políticas de otras tablas.
+- Líneas 28–29: permiten leer filas cuando auth.uid() coincide con user_id.
+- Líneas 31–32: permiten insertar filas solo si el user_id de la nueva fila coincide con el usuario autenticado.
+- Líneas 34–35: permiten actualizar filas propias y exigen que sigan perteneciendo al mismo usuario después del cambio.
+- Líneas 37–38: permiten borrar únicamente filas propias, mediante auth.uid() = user_id.
+
+Estas políticas no incluyen TO authenticated, por lo que su ámbito de rol es amplio. La condición basada en auth.uid() impide que una solicitud anónima pase la regla, porque no tiene un usuario autenticado. También hay que revisar las demás políticas de la tabla: las políticas permisivas pueden combinarse, y otra política DELETE o ALL con una condición más amplia podría ampliar el acceso.
+
+### Líneas 40–61: función resolve_qr
+
+- Líneas 40–42: describen la resolución pública.
+- Línea 43: crea o reemplaza public.resolve_qr(text). Si ya existiera una función con esa firma, su implementación sería sustituida.
+- Línea 44: declara que devuelve texto: el destino o NULL si no encuentra un QR activo.
+- Línea 45: usa PL/pgSQL.
+- Líneas 46–47: la función se ejecuta como su propietario (SECURITY DEFINER) y fija search_path en public. Esto eleva la importancia de revisar la función y su propietario; el cuerpo es acotado y usa public.qr_codes explícitamente.
+- Líneas 49–50: declaran una variable local para el destino.
+- Líneas 52–57: incrementan scans, actualizan updated_at y devuelven el destino del código solicitado, solo si está activo.
+- Líneas 59–61: devuelven el destino y terminan la función.
+
+La función está diseñada para que cualquiera que conozca un código activo pueda resolverlo; ese es el comportamiento del QR público. Como efecto secundario, cada llamada aumenta el contador, así que llamadas automatizadas podrían inflarlo.
+
+### Líneas 63–64: permisos de la función
+
+- Línea 63: revoca los permisos concedidos al rol especial PUBLIC para esta función.
+- Línea 64: concede ejecución a anon y authenticated, necesaria para que la ruta pública de escaneo la invoque.
+
+Si ya existiera la función, conviene revisar sus permisos y otros roles explícitos antes de reemplazarla. La revocación a PUBLIC no debe interpretarse como una limpieza de todos los permisos directos que pudieran haberse concedido a roles específicos.
+
+## ¿Puede afectar a public.employees?
+
+No hay sentencias que creen, alteren, borren, indexen ni cambien políticas de employees. Las políticas nombradas y RLS están calificadas para public.qr_codes; la clave foránea apunta a auth.users, no a employees.
+
+En el estado que confirmaste —public.employees existe y public.qr_codes no— el efecto directo previsto es crear qr_codes, sus políticas e índice, y la función resolve_qr. Aun así, el SQL Editor debe estar abierto en el proyecto correcto, y conviene revisar si ya existe una función resolve_qr(text) u otro objeto con nombre conflictivo.
+
+## Si algunas políticas ya existen
+
+Si las cuatro políticas con esos nombres ya están en qr_codes, el script las elimina y las vuelve a crear con las condiciones mostradas. Si tienen personalizaciones, estas se pierden.
+
+Las políticas de qr_codes con otros nombres no se eliminan. Deben revisarse porque una política permisiva adicional de DELETE o ALL podría abrir acceso más amplio. Si la tabla qr_codes no existe —como indicaste— no habría políticas previas sobre esa tabla que reemplazar.
+
+## ¿Es seguro ejecutarlo?
+
+No apunta a modificar employees y parece diseñado para crear el esquema QR que falta. Eso no basta para recomendar ejecutarlo sin revisión: reemplaza políticas de nombres concretos, puede reemplazar resolve_qr(text), concede la función a usuarios anónimos para el flujo público y define un borrado en cascada al eliminar una cuenta de Auth.
+
+Además, no incluye una transacción explícita. No asumiría que todos sus pasos se aplicarán como una unidad si algo falla a mitad de la ejecución.
+
+## Precauciones antes de aplicarlo
+
+- Confirmar el proyecto seleccionado en el Dashboard y conservar una copia/exportación del estado actual.
+- Revisar en el Dashboard si ya existe resolve_qr(text), si hay políticas u objetos con los nombres del script y si qr_codes sigue ausente.
+- Revisar el propósito de la resolución anónima y aceptar que las llamadas públicas a códigos activos incrementan el contador.
+- Tener presente que borrar una cuenta de Auth borrará sus QR por la relación en cascada.
+- Aplicarlo primero en un entorno de prueba si está disponible y comprobar acceso de dos usuarios distintos, además del flujo anónimo de escaneo.
+- Después de aplicar, verificar desde el Dashboard la tabla, RLS y todas las políticas existentes; no limitar la revisión a que aparezca own delete.
+
+Conclusión: con los datos actuales, el script no debería alterar public.employees; su ámbito funcional es el esquema QR. El paso prudente es revisar primero la función y políticas existentes en el proyecto confirmado y conservar una copia del estado. No ejecuté SQL ni cambié Supabase.
