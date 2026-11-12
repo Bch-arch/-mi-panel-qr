@@ -1,0 +1,20 @@
+Voy a actualizar origin/main y leer directamente el contenido versionado de esa migración, no el informe ni la copia local. Si main aún tiene la política antigua, la corregiré, crearé un commit y verificaré de nuevo el archivo publicado después del push.
+You approved codex to run git fetch origin main && git log -1 --oneline origin/main && git show 'origin... this time
+• Ran git fetch origin main && git log -1 --oneline origin/main && git show 'origin/main:supabase/migrations/202611120001_qr_inventory_batches.sql' | sed -n '94,108p' && git st…
+  └  D "pruebas supabase"
+    ?? AGENTS.md
+    ?? docs/PROJECT_CONTEXT.md
+• Ran git show --stat --oneline b61bc2d && git show --format= --name-only b61bc2d && git show 'origin/main:supabase/migrations/202611120002_qr_codes_delete_own_batch_guard.sql'…
+  └ 
+    create policy "qr_codes_delete_own" on public.qr_codes
+      for delete using (auth.uid() = user_id and batch_id is null);
+• Ran git log --oneline origin/main -- supabase/migrations/202611120001_qr_inventory_batches.sql | head -8 && git show --format= d181740 -- supabase/migrations/202611120001_qr_…
+  └    for delete using (auth.uid() = user_id and batch_id is null);
+     
+    d181_is_in_main:0
+Verifiqué el archivo directamente desde origin/main: contiene los dos DROP POLICY y crea únicamente qr_codes_delete_own con batch_id IS NULL.
+
+La corrección está en el commit d181740, que forma parte de main. El commit más reciente, b61bc2d, solo añade un informe; no revierte ni cambia la migración. No hice cambios ni un push duplicado.
+
+- Commit que corrigió la migración (https://github.com/Bch-arch/-mi-panel-qr/commit/d181740)
+- Migración actual en main (https://github.com/Bch-arch/-mi-panel-qr/blob/main/supabase/migrations/202611120001_qr_inventory_batches.sql)
