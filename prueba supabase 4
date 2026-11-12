@@ -1,0 +1,32 @@
+Haré una búsqueda exhaustiva en el código fuente, excluyendo archivos de entorno para no leer ni exponer secretos. Después cotejaré cada columna y llamada con el SQL propuesto y revisaré los permisos requeridos por las operaciones reales.
+• Explored
+  └ Search qr_codes|resolve_qr|service_role|SUPABASE_SERVICE_ROLE|serviceRole in .
+• Ran cat lib/supabase/client.ts lib/supabase/server.ts lib/supabase/public.ts; sed -n '25,70p' lib/data.ts; sed -n '35,100p' app/actions/qr.ts; sed -n '125,240p' app/actions/q…
+  └ 
+    revoke all on function public.resolve_qr(text) from public;
+    grant execute on function public.resolve_qr(text) to anon, authenticated;
+## Resultados
+
+- Usos encontrados: qr_codes aparece en lib/data.ts, app/actions/qr.ts y app/api/qr/[id]/download/route.ts. resolve_qr se invoca desde app/r/[slug]/route.ts. También hay referencias en SQL y documentación.
+- Uso de service_role: no encontré referencias a service_role, claves de servicio ni clientes creados con esa clave en rutas, Server Actions o procesos del servidor. Los clientes usan la clave publishable y, cuando corresponde, las cookies de sesión. La ruta pública crea un cliente sin sesión para llamar al RPC.
+- Columnas: la tabla propuesta coincide con las operaciones actuales:
+  - id, name, destination, code, status, scans y created_at se consultan o usan en la aplicación.
+  - user_id se usa para filtrar el acceso y se envía al crear.
+  - updated_at se actualiza al cambiar estado o al resolver un QR.
+  - Los campos restantes que la aplicación no envía —como UUID, contador y fechas— tienen valores por defecto en la definición propuesta.
+  - El tipo y restricción de status coinciden con los tres estados que usa TypeScript.
+- Permisos de tabla: authenticated necesita SELECT, INSERT, UPDATE y DELETE. SELECT es necesario también para las consultas con .select(...) que siguen a cambios y eliminaciones. Las políticas propias propuestas cubren esas operaciones. La aplicación no necesita acceso directo de anon a la tabla.
+- Permisos del RPC: la ruta /r/[slug] lo llama sin sesión, así que anon necesita EXECUTE sobre resolve_qr(text); authenticated también aparece concedido en la propuesta. El esquema public debe permitir USAGE a esos roles, como es habitual en Supabase. La propuesta no cambia ese permiso de esquema; si estuviera restringido en este proyecto, la llamada RPC podría fallar.
+- Efecto de revocar a service_role: no rompe el código encontrado, que no usa esa clave. Sí podría afectar una integración externa o un proceso futuro que dependa de acceso directo a esta tabla mediante service_role.
+
+## Comportamiento de resolve_qr
+
+El nombre del parámetro p_slug coincide con la llamada RPC. La función busca por code, solo considera filas con estado activo, incrementa scans, actualiza updated_at y devuelve destination. La ruta espera una cadena; si no la recibe o hay error, redirige a /qr-no-disponible; si la recibe, devuelve una redirección HTTP 302. El comportamiento propuesto coincide con el flujo de redirección actual.
+
+La función debe ejecutarse con privilegios de su propietario para poder actualizar el contador sin conceder a anon acceso directo a la tabla. El cuerpo propuesto limita la actualización a una fila por código —que tiene restricción de unicidad—, pero las solicitudes públicas repetidas pueden inflar el contador.
+
+## Incompatibilidades o condiciones pendientes
+
+No encontré una incompatibilidad entre las columnas/permisos propuestos y las consultas actuales. Antes de aplicar, conviene confirmar que la función se creará con un propietario que pueda actualizar qr_codes, y que anon y authenticated tienen USAGE en public.
+
+El REVOKE a service_role de la propuesta es compatible con el código actual, aunque podría afectar herramientas o integraciones externas que no aparecen en el repositorio. No modifiqué archivos, no ejecuté SQL ni cambié Supabase.
