@@ -1,0 +1,72 @@
+Voy a separar el diagnóstico del build de las restricciones del entorno anterior. Primero revisaré la configuración instalada de Next 16.4.2 y repetiré lint/TypeScript; luego intentaré ejecutar npm run build fuera del sandbox, como solicitas. No cambiaré configuración ni desactivaré comprobaciones salvo que la evidencia muestre una causa del proyecto.
+• Ran sed -n '1,220p' next.config.ts; node_modules/.bin/next --version; node_modules/.bin/next build --help | sed -n '1,100p'; rg -n 'binding to a port|Operation not permitted|…
+  └ node_modules/next/dist/docs/01-app/01-getting-started/13-fonts.md:306:To use a local font, import your font from `next/font/local` and specify the [`src`](/docs/pages/api-r…
+    node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/01-metadata/sitemap.md:426:| `v14.2.0`  | Add localizations support.                                …
+    drwxrwxrwt 16 nobody nogroup 4096 Nov 12 04:03 /tmp
+• Ran npx tsc --noEmit
+  └ (no output)
+• Ran npm run lint
+  └ > mi-panel-qr@0.1.0 lint
+    > eslint
+    
+• Explored
+  └ Read turbopackPluginRuntimeStrategy.md
+    Search turbopackPluginRuntimeStrategy|agentFeedback|partialPrefetching|cacheComponents in config-shared.d.ts
+La guía instalada de Next 16.4.2 confirma que Turbopack ejecuta PostCSS/loaders por defecto en procesos hijo que se comunican por sockets. El error “binding to a port / Operation not permitted” coincide con la restricción del sandbox, no con código de la app. La ejecución fuera del sandbox fue rechazada por la política de permisos del entorno; no puedo eludirla. Como prueba compatible documentada por esta versión, usaré temporalmente turbopackPluginRuntimeStrategy: "workerThreads" (Node actual es 22, sin el problema de teardown descrito en la guía) y comprobaré si permite el build sin desactivar validaciones.
+• Edited next.config.ts (+1 -0)
++    turbopackPluginRuntimeStrategy: "workerThreads",
+• Ran npx tsc --noEmit
+  └ (no output)
+• Ran node --version; npm run lint
+  └ > mi-panel-qr@0.1.0 lint
+    > eslint
+    
+• Exited (status 1) npm run build
+  └ ✓ Compiled successfully in 3.7s
+      Running TypeScript ...
+    Could not parse output from TypeScript's --showConfig.
+• Explored
+  └ Search Could not parse output from TypeScript in next
+    Read runTypeScriptCli.js, font.md
+• Ran node_modules/.bin/tsc --showConfig --project tsconfig.json --pretty false > /tmp/mi-panel-qr-next-showconfig.stdout 2>/tmp/mi-panel-qr-next-showconfig.stderr; node -e 'co…
+  └ {"exitCode":0,"stdoutIsJson":true,"stderrNonEmpty":false}
+• Explored
+  └ Search getTypeScriptConfigurationCli\( in esm
+    Search TypeScript.*showConfig|tsconfig.*path|tsConfigPath in runTypeScriptCli.js
+• Exited (status 2) sed -n '1,145p' node_modules/next/dist/esm/lib/typescript/runTypeScriptCli.js; sed -n '1,100p' node_modules/next/dist/esm/lib/typescript/runTypeCheckCli.js;…
+  └ }
+    
+    //# sourceMappingURL=runTypeCheckCli.js.map
+• Ran sed -n '1,180p' node_modules/next/dist/docs/01-app/03-api-reference/05-config/01-next-config-js/useTypeScriptCli.md; rg -n 'useTypeScriptCli' node_modules/next/dist/serve…
+  └ node_modules/next/dist/server/config-shared.d.ts:633:    useTypeScriptCli?: boolean;
+    node_modules/next/dist/server/config-shared.d.ts:1976:        useTypeScriptCli: true;
+    5.9.3
+• Edited next.config.ts (+0 -1)
+-    turbopackPluginRuntimeStrategy: "workerThreads",
+• Ran npx tsc --noEmit
+  └ (no output)
+• Ran npm run lint
+  └ > mi-panel-qr@0.1.0 lint
+    > eslint
+    
+• Exited (status 1) npm run build
+  └     at <unknown> (TurbopackInternalError: [project]/app/globals.css.css [app-client] (css)) {
+      location: undefined
+    }
+## Resultado de la investigación
+
+El EPERM proviene del entorno de ejecución, no de un error identificado en el código de la aplicación. En Next.js 16.4.2, Turbopack ejecuta loaders y PostCSS en procesos hijo que se comunican mediante sockets. El build falla al intentar enlazarse a un puerto local, operación que el sandbox deniega.
+
+Intenté ejecutar npm run build fuera del sandbox, como pediste, pero la política de permisos de esta sesión rechazó esa ejecución. No puedo ejecutar comandos fuera de ese entorno ni eludir esa restricción.
+
+## Comprobaciones solicitadas
+
+- npm run lint: correcto.
+- npx tsc --noEmit: correcto.
+- npm run build: no completado; Turbopack falla con Operation not permitted al crear un proceso y enlazarse a un puerto.
+- Probé temporalmente la estrategia workerThreads, compatible con Next.js 16.4.2. Turbopack compiló la aplicación, pero después Next falló al procesar la salida de tsc --showConfig. Revertí ese ajuste porque no confirmó un build completo y no conviene cambiar la configuración del proyecto para adaptarla al sandbox.
+- La alternativa Webpack también había fallado en este entorno al procesar tsc --showConfig.
+
+La configuración de Turbopack no presenta evidencia de un error propio de la aplicación: el fallo señalado ocurre al ejecutar el loader CSS bajo la restricción del sandbox. No desactivé validaciones ni cambié archivos de configuración. No hay cambios de código pendientes en este turno.
+
+Para obtener el resultado real que falta, ejecuta npm run build en el checkout local fuera del sandbox. Hasta que ese build termine correctamente, el resultado de producción sigue sin estar verificado. No ejecuté SQL, no modifiqué Supabase ni desplegué.
