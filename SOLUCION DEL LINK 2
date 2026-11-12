@@ -1,0 +1,96 @@
+Haré una auditoría sin modificar archivos ni contactar Supabase para cambiar datos. Revisaré README, configuración y flujos de autenticación/rutas; buscaré secretos de forma que el reporte solo muestre archivos y tipos de hallazgo, nunca valores. Ejecutaré ESLint, TypeScript y el build, y separaré lo que pueda validar localmente de lo que requeriría un despliegue real.
+• Ran pwd; rg --files -g 'README.md' -g 'AGENTS.md' -g 'next.config.*' -g 'middleware.*' -g 'proxy.*' -g 'package.json' -g 'tsconfig.json' -g '.env*' -g 'docs/**' -g 'app/**' -…
+  └ # debe ser HTTPS y no puede apuntar a localhost ni a una dirección privada.
+    # QR_PUBLIC_BASE_URL=http://localhost:3000
+    QR_PUBLIC_BASE_URL=
+• Explored
+  └ Read qr-public-url.ts, admin.ts, auth.ts, server.ts, client.ts, proxy.ts, public.ts, route.ts, .gitignore, page.tsx, layout.tsx, qr.ts, schema.sql, PROJECT_CONTEXT.md
+• Ran sed -n '1,280p' components/auth/login-form.tsx; sed -n '1,240p' components/auth/signup-form.tsx 2>/dev/null || true; rg -n 'signInWith|signUp|signOut|redirectTo|emailRedi…
+  └ components/auth/register-form.tsx:26:    const { error: signUpError } = await supabase.auth.signUp({
+    components/auth/register-form.tsx:30:        emailRedirectTo: `${window.location.origin}/auth/callback`,
+    components/auth/register-form.tsx:34:    if (signUpError) {
+La revisión del código ya muestra dos pendientes importantes de producción: la aplicación depende de que las cuatro variables correctas estén configuradas en el entorno de despliegue, y el parámetro redirectTo del formulario de login se pasa directamente a router.push, por lo que no se limita a rutas internas. También confirmaré qué estado de variables está disponible localmente y si este workspace permite verificar archivos realmente publicados en GitHub; no mostraré valores de secretos.
+• Ran if test -d .git; then echo git-metadata-present; git status --short --branch; git remote -v | sed -E 's#(https?://)[^/@]+:[^/@]+@#\1[REDACTED]@#'; else echo git-metadata-…
+  └ fatal: not a git repository (or any of the parent directories): .git
+    fatal: not a git repository (or any of the parent directories): .git
+    env-local-not-ignored
+• Ran node -e 'const {loadEnvConfig}=require("@next/env");loadEnvConfig(process.cwd());const {isIP}=require("node:net");const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f…
+  └ {"supabaseUrlConfigured":true,"supabaseUrlValid":true,"publishableKeyConfigured":true,"adminIdConfigured":true,"adminIdUuidValid":true,"qrPublicUrlConfigured":true,"qrPubli…
+• Explored
+  └ List python3 -c "import pathlib,re; roots=[pathlib.Path(\"app\"),pathlib.Path(\"components\"),pathlib.Path(\"lib\"),pathlib.Path(\"supabase\"),pathlib.Path(\"docs\")];
+         pats={\"service-role marker\":re.compile(r\"service[_-]?role|SUPABASE_SERVICE_ROLE_KEY\",re.I),\"private-key block\":re.compile(r\"-----BEGIN (?:RSA |EC |OPENSSH )?PRI…
+         KEY-----\"),\"JWT-like literal\":re.compile(r\"eyJ[A-Za-z0-9_-]{12,}\\.[A-Za-z0-9_-]{12,}\\.[A-Za-z0-9_-]{8,}\")}; found=[]
+• Ran npx tsc --noEmit
+  └ (no output)
+• Ran npm run lint
+  └ > mi-panel-qr@0.1.0 lint
+    > eslint
+    
+• Ran ls -ld .git; find .git -maxdepth 2 -type f -printf '%P\n' 2>/dev/null | head -20; find .git -maxdepth 1 -type f -exec sh -c 'head -n 1 "$1" | cut -c1-80' sh {} \; 2>/dev/…
+  └ dr-xr-xr-x 2 bruno_checa bruno_checa 40 Nov 12 03:52 .git
+• Ran NODE_PATH=/home/bruno_checa/mi-panel-qr/node_modules node --conditions=react-server -e 'const {loadEnvConfig}=require("@next/env");loadEnvConfig(process.cwd());process.en…
+  └ {"productionQrBaseAccepted":false,"configurationError":true}
+• Exited (status 1) npm run build
+  └ 
+    
+        at ignore-listed frames
+La verificación local confirma que las variables principales están presentes y que el UUID admin tiene formato válido, pero la URL configurada para QR no usa HTTPS; el validador de producción la rechaza. El escaneo del código no encontró claves service_role, JWT literales ni bloques de claves privadas. No pude verificar el contenido publicado en GitHub: este workspace contiene un directorio .git vacío y no tiene metadatos de repositorio/remoto utilizables.
+• Explored
+  └ Read layout.tsx, register-form.tsx, login-form.tsx, qr-public-url.ts, proxy.ts, .gitignore, .env.example
+## Diagnóstico
+
+El proyecto aún no está listo para publicarse. La protección administrativa está implementada en el código, pero hay pendientes de seguridad y configuración, y el build de producción no terminó.
+
+### Acceso y Supabase
+
+- El acceso al panel se verifica en el proxy y en lib/auth.ts usando auth.getUser() y el UUID de ADMIN_USER_ID. Las Server Actions y la ruta de descarga vuelven a comprobar que el usuario sea el administrador. Las consultas QR también filtran por propietario. La implementación revisada es coherente con acceso exclusivo al panel.
+- El registro está cerrado en la interfaz y /registro redirige al login. Pero eso no desactiva el endpoint público de registro de Supabase Auth: una persona aún podría crear una cuenta directamente con la clave pública. No debería obtener acceso al panel, pero para cerrar realmente las altas hay que desactivar los registros en Auth.
+- El inicio de sesión toma redirectTo directamente de la URL y lo pasa a router.push. Debe limitarse a rutas internas antes de desplegar; actualmente no se valida en el formulario login-form.tsx (components/auth/login-form.tsx:10).
+- El callback usa el origen de la petición y limita next a rutas internas. Para producción, Supabase debe permitir el origen HTTPS del sitio y la ruta /auth/callback. No pude verificar esa configuración remota.
+
+### QR y HTTPS
+
+- La descarga PNG y SVG usa QR_PUBLIC_BASE_URL para construir /r/[code]. El helper exige HTTPS y rechaza hosts locales en producción.
+- En el entorno local, QR_PUBLIC_BASE_URL está configurada, pero usa HTTP. Por eso la validación de producción la rechaza. No incluí el valor ni el host en este reporte.
+- /r/[slug] llama a resolve_qr mediante el cliente público. El flujo de código sirve para una URL HTTPS; no pude comprobar su funcionamiento desde Internet sin un despliegue y un host público configurado.
+
+### Secretos y GitHub
+
+- En los árboles de código revisados no encontré literales con marcadores de claves service_role, JWT ni claves privadas. La clave NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY está diseñada para ser pública; no es una clave de servicio.
+- .gitignore excluye .env*, pero también coincide con .env.example y no tiene una excepción para ese archivo. Conviene añadir una excepción explícita para que la plantilla segura pueda incluirse en Git.
+- No pude auditar GitHub ni confirmar qué archivos están rastreados: el directorio .git está vacío y no hay metadatos utilizables del repositorio o remoto. Por ello, no puedo certificar el historial publicado ni descartar secretos en commits anteriores. Los valores de .env.local no se mostraron.
+
+### Configuración y build
+
+- Next.js 16.4.2, Cache Components y partialPrefetching están configurados. La configuración se cargó al iniciar el build.
+- El build falló porque no pudo descargar Geist y Geist Mono desde Google Fonts. Así, no se completó la validación de producción; en un entorno de build con acceso a Google Fonts podría pasar, pero aquí no quedó demostrado. layout.tsx (app/layout.tsx:2) importa esas fuentes desde Google.
+- El README todavía es la plantilla de Next.js y no documenta el despliegue ni las variables reales del proyecto.
+
+## Archivos que requieren atención antes de desplegar
+
+- components/auth/login-form.tsx (components/auth/login-form.tsx:10): validar redirectTo como ruta interna segura.
+- .gitignore (.gitignore:33): excluir .env.local y otros secretos, pero permitir .env.example.
+- README.md (README.md): sustituir instrucciones de plantilla por configuración y despliegue del proyecto.
+- app/layout.tsx (app/layout.tsx:2): solo si se quiere que el build no dependa de que el entorno pueda descargar fuentes.
+- En Supabase Auth, fuera del repositorio: configurar el origen y callback HTTPS permitidos y desactivar nuevos registros si la intención sigue siendo mantener una sola cuenta admin.
+
+## Variables de entorno
+
+Configura en el proveedor de despliegue:
+
+- NEXT_PUBLIC_SUPABASE_URL
+- NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+- ADMIN_USER_ID — UUID de la cuenta administradora; solo servidor.
+- QR_PUBLIC_BASE_URL — origen HTTPS público, sin ruta ni parámetros; solo servidor.
+
+El NEXT_PUBLIC_* se incorpora al cliente durante el build, así que debe estar disponible al construir y desplegar. No hace falta una service_role para el flujo revisado.
+
+## Comprobaciones ejecutadas
+
+- ESLint: correcto.
+- TypeScript: correcto.
+- Build: falló al descargar ambas fuentes de Google Fonts.
+- Inspección de autenticación, filtros de propietario, rutas QR, variables y marcadores de secretos: completada sin mostrar valores.
+- Supabase remoto, acceso desde iPhone por datos móviles y contenido de GitHub: no verificados.
+
+No modifiqué archivos ni realicé cambios en Supabase.
