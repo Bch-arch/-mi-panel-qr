@@ -1,0 +1,52 @@
+Voy a ejecutar comprobaciones locales de lint, tipos y build, y haré una llamada de salud de solo lectura a Supabase usando la configuración local sin imprimir valores. No crearé ni borraré registros ni invocaré el RPC de redirección; sin una sesión de prueba autenticada, esas operaciones no se pueden verificar de extremo a extremo sin tocar datos.
+• Exited (status 1) node -e 'const {loadEnvConfig}=require("@next/env"); loadEnvConfig(process.cwd()); const url=process.env.NEXT_PUBLIC_SUPABASE_URL; const key=process.env.NEX…
+  └ supabase-health: network-unavailable
+• Ran npx tsc --noEmit
+  └ (no output)
+• Exited (status 1) npm run build
+  └ 
+    
+        at ignore-listed frames
+• Ran npm run lint
+  └ > mi-panel-qr@0.1.0 lint
+    > eslint
+    
+## Resultado de integración
+
+La revisión del código muestra que las operaciones de QR son compatibles con la estructura SQL aprobada. No pude verificar la conexión real ni ejecutar flujos CRUD contra Supabase desde este entorno, porque la llamada de salud no pudo establecer conexión de red. Para evitar tocar datos reales, no creé ni borré registros y no invoqué resolve_qr.
+
+### Compatibilidad de operaciones
+
+| Operación | Código actual | Permisos/política requerida |
+|---|---|---|
+| Crear | Cuenta QR con SELECT y luego inserta user_id, name, destination, code y status. | SELECT e INSERT para authenticated; política de inserción restringida al propietario. |
+| Leer | Lista los campos id, name, destination, code, status, scans, created_at; las consultas por ID filtran también por user_id. | SELECT y política de lectura por propietario. |
+| Editar | Actualiza name, destination, status y updated_at; recibe id como resultado. | UPDATE más SELECT, ambos limitados al propietario. |
+| Cambiar estado | Actualiza status y updated_at; recibe el id. | UPDATE más SELECT por propietario. |
+| Eliminar | Borra por id y user_id y solicita el id eliminado. | DELETE y SELECT, limitados al propietario. |
+| Resolver código público | Llama resolve_qr con el argumento p_slug; espera que devuelva un texto con el destino. | EXECUTE para anon; la función debe actualizar el contador y devolver destino solo para QR activos. |
+
+Las columnas usadas coinciden con la tabla SQL. El código no requiere permisos de anon para consultar directamente qr_codes.
+
+### Autenticación y aislamiento
+
+Las Server Actions llaman a requireUser(), que valida la sesión con Supabase antes de mutar datos. Las lecturas y actualizaciones por ID filtran por user_id; la descarga también valida sesión y filtra por propietario. La política RLS por propietario proporciona la segunda capa de aislamiento. app/actions/qr.ts (app/actions/qr.ts:39) lib/data.ts (lib/data.ts:29) app/api/qr/[id]/download/route.ts (app/api/qr/[id]/download/route.ts:17)
+
+La ruta pública usa el cliente publishable sin sesión para invocar el RPC. No encontré uso de service_role en el código de la aplicación. lib/supabase/public.ts (lib/supabase/public.ts:1) app/r/[slug]/route.ts (app/r/[slug]/route.ts:4)
+
+### Comprobaciones ejecutadas
+
+- npm run lint: correcto.
+- npx tsc --noEmit: correcto. Esto no valida el esquema remoto porque el proyecto mantiene sus tipos de fila manualmente.
+- npm run build: falló al descargar Geist y Geist Mono desde Google Fonts; el bloqueo es de conectividad, no un error reportado en las consultas a Supabase.
+- Comprobación de salud Supabase de solo lectura: sin conexión de red desde este entorno. Las variables locales requeridas estaban disponibles, pero no se alcanzó el endpoint.
+- No hay un script de pruebas automatizadas configurado en package.json.
+
+## Pendiente para confirmar la integración real
+
+1. En un entorno con acceso de red y una sesión autenticada de prueba, crear, listar, editar y eliminar un QR temporal.
+2. Probar con dos cuentas que una no pueda leer, editar, descargar ni eliminar el QR de la otra.
+3. Probar /r/[slug] con un código activo, uno pausado y uno inexistente; confirmar destino y contador.
+4. Repetir npm run build en un entorno con acceso a Google Fonts.
+
+No ejecuté SQL, no invoqué el RPC, no cambié archivos ni modifiqué políticas RLS.
