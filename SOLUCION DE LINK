@@ -1,0 +1,72 @@
+Voy a rastrear todas las rutas donde se arma el enlace codificado y los caminos de descarga PNG/SVG. Implementaré una única resolución de QR_PUBLIC_BASE_URL, con validación de URLs locales en producción y un error explícito si falta, sin tocar Supabase ni inventar un dominio. Luego correré ESLint y TypeScript.
+• Explored
+  └ Read route.ts
+    Search localhost|127\.0\.0\.1|NEXT_PUBLIC_.*URL|QR_PUBLIC|/r/|toDataURL|toString\(|QRCode|qrcode in app
+    Read route.ts, page.tsx, .env.example, PROJECT_CONTEXT.md, next.config.ts
+La descarga PNG/SVG y la vista previa usan el mismo Route Handler; actualmente ese handler toma request.nextUrl.origin, que explica que el QR codifique el host local. No encontré otros generadores. Voy a centralizar el armado del destino en una función de servidor compartida por ambos formatos, permitir el fallback localhost solo fuera de producción y exigir una URL HTTPS pública válida en producción.
+• Explored
+  └ List 03-file-conventions
+    Search route\.md$
+    Read route.md
+• Edited 4 files (+170 -2)
+  └ .env.example (+6 -0)
++
++# Origen público codificado dentro de los QR. En desarrollo puede ser
++# http://localhost:3000 o una URL accesible desde el teléfono. En producción
+
+  └ app/api/qr/[id]/download/route.ts (+14 -1)
++import {
++  getPublicQrUrl,
++  QrPublicUrlConfigurationError,
+
+  └ docs/PROJECT_CONTEXT.md (+1 -1)
+-6. La descarga valida sesión y consulta el QR antes de generar PNG/SVG apuntando a la URL corta del sitio actual.
++6. La descarga valida sesión y consulta el QR antes de generar PNG/SVG apuntando a `QR_PUBLIC_BASE_URL/r/[code]`. En desarrollo, la variable puede omitirse (fallback `http://localhost:3000`) o configurarse con una URL accesible desde un teléfono. En producción es obligatoria, HTTPS y debe ser un host público; el handler devuelve un erro
+
+  └ lib/qr-public-url.ts (+149 -0)
++import "server-only";
++import { isIP } from "node:net";
++
+• Edited lib/qr-public-url.ts (+14 -4)
+-  const firstTenBits = value >> 118n;
+-  if (firstTenBits === 0b1111111000n) return true; // unique-local fc00::/7
+-  if (firstTenBits === 0b1111111010n) return true; // link-local fe80::/10
+• Exited (status 2) npx tsc --noEmit
+  └ lib/qr-public-url.ts(71,16): error TS2737: BigInt literals are not available when targeting lower than ES2020.
+    lib/qr-public-url.ts(71,24): error TS2737: BigInt literals are not available when targeting lower than ES2020.
+    lib/qr-public-url.ts(72,33): error TS2737: BigInt literals are not available when targeting lower than ES2020.
+• Ran npm run lint
+  └ > mi-panel-qr@0.1.0 lint
+    > eslint
+    
+• Edited lib/qr-public-url.ts (+19 -36)
+-function ipv6ToBigInt(host: string): bigint | null {
+-  let normalized = host.toLowerCase();
+-  const lastColon = normalized.lastIndexOf(":");
+• Ran node -e 'for (const host of ["::ffff:127.0.0.1","::ffff:192.168.1.1","::ffff:8.8.8.8","::1","fc00::1","fe80::1"]) console.log(host, new URL(`http://[${host}]`).hostname)'
+  └ ::1 [::1]
+    fc00::1 [fc00::1]
+    fe80::1 [fe80::1]
+• Ran npx tsc --noEmit
+  └ (no output)
+• Ran npm run lint
+  └ > mi-panel-qr@0.1.0 lint
+    > eslint
+    
+• Exited (status 1) npx tsc lib/qr-public-url.ts --target ES2017 --module commonjs --moduleResolution node --skipLibCheck --types node --outDir /tmp/qr-url-check && NODE_PATH=/…
+  └ }
+    
+    Node.js v22.23.3
+• Ran sed -i '/require("server-only")/d' /tmp/qr-url-check/qr-public-url.js && node -e 'const q=require("/tmp/qr-url-check/qr-public-url.js"); const check=(label,nodeEnv,value,…
+  └ PASS prod rejects https://[::ffff:192.168.1.1]: clear error
+    PASS prod rejects https://printer.local: clear error
+    PASS prod accepts HTTPS host: URL generated
+Implementé QR_PUBLIC_BASE_URL como configuración de servidor para generar los enlaces de los QR. PNG y SVG pasan por el mismo Route Handler y ahora usan una URL construida por qr-public-url.ts (lib/qr-public-url.ts), en vez del origen de la petición, que podía ser localhost:3000.
+
+En desarrollo, si la variable falta, se conserva el fallback http://localhost:3000. Para escanear con un teléfono en la red local, puedes configurarla con la dirección LAN de tu ordenador. En producción la variable es obligatoria y debe contener el origen HTTPS del dominio que configures más adelante. La validación rechaza localhost, IP privadas o locales y nombres de red locales; si falta o no es válida, la descarga devuelve un error claro y no genera el QR.
+
+Documenté la variable en .env.example (.env.example) y actualicé el flujo en PROJECT_CONTEXT.md (docs/PROJECT_CONTEXT.md). Las rutas /r/[slug] y la llamada a resolve_qr no cambiaron; tampoco modifiqué RLS ni datos existentes.
+
+Comprobaciones: ESLint y TypeScript pasaron. También comprobé el fallback de desarrollo, una URL LAN, la falta de configuración en producción, varias direcciones locales y la aceptación de un host HTTPS público de prueba.
+
+En .env.local, configura QR_PUBLIC_BASE_URL=http://localhost:3000 para desarrollo local, o una URL accesible desde el teléfono para probar en la red local. En producción, añade QR_PUBLIC_BASE_URL=https://<tu-dominio> cuando tengas el dominio. No es necesario configurar uno ahora.
