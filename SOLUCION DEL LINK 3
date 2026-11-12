@@ -1,0 +1,83 @@
+Voy a hacer los cuatro cambios solicitados y después revisar de nuevo las guardas de administrador y el recorrido de /r/[slug] y las descargas. Antes de cambiar fuentes, consultaré la guía de fuentes de la versión de Next instalada para elegir una solución local; no tocaré Supabase, datos ni despliegue.
+• Explored
+  └ List docs
+    Search font|fonts
+    Read globals.css
+• Edited 5 files (+25 -55)
+  └ .gitignore (+1 -0)
++!.env.example
+
+  └ README.md (+0 -36)
+-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+-
+-## Getting Started
+
+  └ app/globals.css (+3 -3)
+-  --font-sans: var(--font-geist-sans);
+-  --font-mono: var(--font-geist-mono);
++  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  └ app/layout.tsx (+1 -15)
+-import { Geist, Geist_Mono } from "next/font/google";
+-
+-const geistSans = Geist({
+
+  └ components/auth/login-form.tsx (+20 -1)
++function getSafeRedirectTo(value: string | null): string {
++  if (!value || !value.startsWith("/") || value.startsWith("//") || value.includes("\\")) {
++    return "/";
+• Added README.md (+78 -0)
++# mi-panel-qr
++
++Panel privado para administrar códigos QR dinámicos. Cada QR tiene un código corto estable; la ruta pública `/r/[slug]` consulta `resolve_qr` en Supabase y redirige al d
+• Explored
+  └ Search .env* in .
+    Read .gitignore
+    Read layout.tsx
+• Ran npx tsc --noEmit
+  └ (no output)
+• Ran npm run lint
+  └ > mi-panel-qr@0.1.0 lint
+    > eslint
+    
+Los cambios ya están hechos. ESLint y TypeScript pasan; la revisión confirma que cada acción de QR usa requireAdmin(), la descarga vuelve a comprobar el UUID y propiedad, y la ruta pública conserva resolve_qr. El build está ejecutándose ahora para validar que eliminar next/font/google también elimina el fallo de descarga.
+• Exited (status 1) npm run build
+  └     at <unknown> (TurbopackInternalError: [project]/app/globals.css.css [app-client] (css)) {
+      location: undefined
+    }
+• Ran node_modules/.bin/next build --help
+  └   --experimental-cpu-prof                  Enable CPU profiling. Profile is saved to .next-profiles/ on exit.
+      --internal-trace [level]                 Enable Turbopack tracing. "all" (default) enables turbo-tasks level tracing, "overview" enables overview tracing. (choices: "all"…
+      -h, --help                               Displays this message.
+• Exited (status 1) npm run build -- --webpack
+  └     at ignore-listed frames {
+      type: 'Error'
+    }
+ESLint y TypeScript terminaron correctamente. El npm run build solicitado ya no intenta descargar Google Fonts, pero Turbopack falló porque el entorno sandbox no permite crear el proceso local que necesita. Probé también el fallback de Webpack; Next no pudo leer tsc --showConfig en esta ejecución. Voy a dejar ambos fallos claramente separados de los cambios de código y cerrar la revisión con los pendientes de configuración Supabase.
+• Ran npx tsc --showConfig > /tmp/mi-panel-qr-tsconfig-show.json && node -e 'const fs=require("fs");try{const c=JSON.parse(fs.readFileSync("/tmp/mi-panel-qr-tsconfig-show.json"…
+  └ {"showConfigParses":true,"target":"es2017","module":"esnext"}
+• Explored
+  └ Read login-form.tsx, .gitignore, layout.tsx, globals.css, README.md, auth.ts, route.ts
+## Cambios realizados
+
+- En login-form.tsx (components/auth/login-form.tsx:7), redirectTo ahora solo acepta rutas internas: rechaza URLs externas, rutas // y barras invertidas.
+- En .gitignore (.gitignore:34), los archivos .env* siguen excluidos y se permite publicar .env.example.
+- Reemplacé next/font/google por fuentes del sistema en layout.tsx (app/layout.tsx:1) y globals.css (app/globals.css:8). El build ya no necesita descargar fuentes.
+- Actualicé README.md (README.md:1) con la instalación, las variables, los ajustes de Auth y las comprobaciones de producción. No añadí ningún dominio.
+
+La revisión confirma que el proxy y requireAdmin() validan la sesión y el UUID admin; las acciones vuelven a comprobar autorización, y la descarga comprueba también la propiedad del QR. /r/[slug] sigue siendo pública y usa resolve_qr. No cambié RLS ni realicé operaciones en Supabase.
+
+## Pruebas
+
+- npm run lint: correcto.
+- npx tsc --noEmit: correcto.
+- npm run build: falló porque el sandbox impidió que Turbopack creara un proceso local (EPERM). El fallo anterior de descarga de Google Fonts ya no aparece.
+- También probé npm run build -- --webpack; Next falló al procesar tsc --showConfig, aunque ese comando de TypeScript por separado funciona.
+
+## Pendientes antes de publicar
+
+Todavía no considero el proyecto listo para publicar, porque falta completar un build de producción exitoso en un entorno que permita ejecutar Turbopack o resolver el fallo del build alternativo.
+
+Además, antes del despliegue hay que configurar las variables en el hosting, incluida QR_PUBLIC_BASE_URL con el origen HTTPS real, y ajustar en Supabase el Site URL y la URL permitida /auth/callback. Para mantener una sola cuenta, también hay que desactivar las altas públicas en Supabase Auth: bloquear /registro en la aplicación no desactiva el endpoint público de registro de Supabase.
+
+El workspace no tiene metadatos Git utilizables, así que no pude comprobar si .env.local o secretos figuran en el historial o en GitHub. .gitignore ya protege esos archivos para futuros commits, pero esa comprobación histórica sigue pendiente. No modifiqué datos, empleados, QR ni políticas de Supabase.
