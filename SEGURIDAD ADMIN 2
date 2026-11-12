@@ -1,0 +1,108 @@
+Voy a revisar el estado del commit de referencia, las rutas y todas las operaciones Supabase antes de editar. Implementaré la autorización en el servidor y el proxy con cierre seguro cuando falte ADMIN_USER_ID; no tocaré RLS, Supabase Auth, SQL ni registros existentes.
+• Ran git status --short; git rev-parse --show-toplevel 2>/dev/null; git show --stat --oneline --no-renames 211e9d2 2>/dev/null; find node_modules/next/dist/docs/01-app -path '…
+  └ node_modules/next/dist/docs/01-app/02-guides/server-actions.md:32:> **Good to know:** This is a property of the client dispatcher, not of Server Functions in general. The s…
+    node_modules/next/dist/docs/01-app/02-guides/server-actions.md:84:- **Encrypted action IDs and dead code elimination.** Action references are encrypted at build time, and u…
+    node_modules/next/dist/docs/01-app/02-guides/server-actions.md:145:- [`updateTag`](/docs/app/api-reference/functions/updateTag): immediate expiration of a tag. The next rea…
+• Explored
+  └ Read 16-proxy.md, server-actions.md, forms.md
+El diagnóstico confirma que hoy cualquier usuario autenticado se considera válido; las políticas por user_id aíslan filas, pero no hacen administrador a una cuenta concreta. Añadiré el UUID configurado como autorización adicional en el proxy, el acceso a datos, las acciones y la descarga. El archivo SQL desplegado y las políticas RLS quedarán intactos en esta fase.
+• Explored
+  └ Read login-form.tsx, page.tsx
+• Edited 5 files (+43 -10)
+  └ .env.example (+4 -0)
++
++# UUID de la única cuenta administradora de Supabase Auth (solo servidor).
++# Si está vacío o no es un UUID, el acceso administrativo queda denegado.
+
+  └ app/actions/qr.ts (+5 -5)
+-import { requireUser } from "@/lib/auth";
++import { requireAdmin } from "@/lib/auth";
+    ⋮
+
+  └ app/api/qr/[id]/download/route.ts (+4 -0)
++import { isAdminUserId } from "@/lib/admin";
+   ⋮
++  if (!isAdminUserId(user.id)) {
+
+  └ lib/admin.ts (+17 -0)
++const UUID_PATTERN =
++  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
++
+
+  └ lib/auth.ts (+13 -5)
++import { getConfiguredAdminId, isAdminUserId } from "@/lib/admin";
+   ⋮
+-async function readUser(): Promise<CurrentUser> {
+• Edited 3 files (+57 -15)
+  └ app/(auth)/registro/page.tsx (+2 -2)
+-import RegisterForm from "@/components/auth/register-form";
++import { redirect } from "next/navigation";
+-  return <RegisterForm />;
+
+  └ components/auth/login-form.tsx (+14 -9)
+-import Link from "next/link";
+    ⋮
++  const routeError = searchParams.get("error");
+
+  └ lib/supabase/proxy.ts (+41 -4)
++import { getConfiguredAdminId, isAdminUserId } from "@/lib/admin";
++
++function redirectPreservingCookies(
+• Edited lib/admin.ts (+2 -0)
++import "server-only";
++
+La capa de Next.js ya exige el UUID administrativo en el proxy, las lecturas, las cuatro acciones QR y la descarga. El registro visual queda cerrado, pero no he desactivado Supabase Auth ni cambiado RLS, tal como pediste; por eso la protección directa de la Data API seguirá dependiendo de la fase Supabase pendiente. Ahora ejecutaré ESLint y TypeScript y haré el barrido final de acciones y rutas.
+• Ran rg -n "requireUser|requireAdmin|isAdminUserId|from\(\"qr_codes\"\)|rpc\(|auth\.signUp|/registro|service_role|SUPABASE_SERVICE_ROLE" --glob '!node_modules/**' --glob '!pac…
+  └ app/auth/callback/route.ts
+    app/actions/qr.ts
+    app/api/qr/[id]/download/route.ts
+• Ran npx tsc --noEmit
+  └ (no output)
+• Ran npm run lint
+  └ > mi-panel-qr@0.1.0 lint
+    > eslint
+    
+• Explored
+  └ Read admin.ts
+    Read auth.ts
+    Read proxy.ts
+## Implementado en Next.js
+
+- Añadí requireAdmin(): valida la sesión con auth.getUser() y compara el UUID con ADMIN_USER_ID. Si falta o no tiene formato UUID, deniega acceso.
+- Protegí las lecturas privadas, las cuatro Server Actions de QR y la descarga.
+- El proxy ahora limita las rutas privadas al administrador y conserva públicas /r/*, /auth/*, /login y /qr-no-disponible. También conserva las cookies de sesión en sus redirecciones.
+- Cerré el registro en la interfaz: /registro redirige al login y se quitó el enlace para crear cuenta. Se mantiene el inicio de sesión actual.
+- La resolución pública resolve_qr no se modificó.
+- No se introdujeron claves de servicio ni se modificaron employees o registros QR.
+
+## Archivos modificados
+
+- lib/admin.ts (lib/admin.ts:1) — nuevo; valida el UUID administrativo.
+- lib/auth.ts (lib/auth.ts:10) — añade requireAdmin() y protege las lecturas de usuario.
+- lib/supabase/proxy.ts (lib/supabase/proxy.ts:19) — autorización del proxy y cierre de /registro.
+- app/actions/qr.ts (app/actions/qr.ts:39) — todas las acciones requieren administrador.
+- app/api/qr/[id]/download/route.ts (app/api/qr/[id]/download/route.ts:18) — respuesta 401 sin sesión y 403 sin autorización.
+- app/(auth)/registro/page.tsx (app/(auth)/registro/page.tsx:1) — redirección al login.
+- components/auth/login-form.tsx (components/auth/login-form.tsx:7) — sin enlace de registro y con mensajes de acceso.
+- .env.example (.env.example:9) — documenta ADMIN_USER_ID vacío, sin inventar el UUID.
+
+El archivo raíz proxy.ts sigue delegando en lib/supabase/proxy.ts; por eso no necesitó cambios.
+
+## Variable que debes configurar
+
+Configura ADMIN_USER_ID con el UUID de tu usuario en Supabase Auth, tanto en .env.local como en las variables del despliegue. No uses una variable NEXT_PUBLIC_*. Tras configurarla, reinicia la aplicación o vuelve a desplegarla.
+
+No leí los valores de .env.local ni incluí ningún valor secreto.
+
+## Comprobaciones
+
+- npm run lint: correcto.
+- npx tsc --noEmit: correcto.
+- Revisé todas las Server Actions y rutas que acceden a QR. resolve_qr permanece sin cambios y las rutas /r/* y /auth/* siguen públicas.
+- No hay script de pruebas automatizadas configurado; no hice pruebas de integración contra Supabase.
+
+## Pendiente y limitación de seguridad
+
+No modifiqué las políticas RLS ni desactivé el registro en Supabase Auth, según lo indicado. Por tanto, esta fase protege el acceso a través de Next.js, pero aún no garantiza el bloqueo directo de la Data API: si el registro de Supabase sigue habilitado, alguien podría crear una cuenta y usar las políticas actuales por user_id para operar sobre sus propias filas directamente. La siguiente intervención en Supabase deberá restringir RLS al administrador y desactivar nuevas altas, después de verificar el acceso con ADMIN_USER_ID.
+
+No pude inspeccionar el commit 211e9d2: este workspace no contiene metadatos Git. No ejecuté SQL ni hice cambios en Supabase.
