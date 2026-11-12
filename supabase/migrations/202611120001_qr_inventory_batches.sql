@@ -96,8 +96,8 @@ create policy "qr batches insert own" on public.qr_batches
 
 -- Conserva la acción de borrado para QR antiguos/individuales, pero no permite
 -- romper el contenido de un lote borrando una de sus unidades por REST.
-drop policy if exists "own delete" on public.qr_codes;
-create policy "own delete" on public.qr_codes
+drop policy if exists "qr_codes_delete_own" on public.qr_codes;
+create policy "qr_codes_delete_own" on public.qr_codes
   for delete using (auth.uid() = user_id and batch_id is null);
 
 create or replace function public.create_qr_batch(

@@ -10,6 +10,8 @@ create table if not exists public.qr_codes (
   name text not null,
   destination text not null,
   code text not null unique,
+  -- La migración de inventario completa su FK al lote.
+  batch_id uuid,
   status text not null default 'activo'
     check (status in ('activo','pausado','borrador')),
   scans integer not null default 0,
@@ -26,6 +28,7 @@ drop policy if exists "own select" on public.qr_codes;
 drop policy if exists "own insert" on public.qr_codes;
 drop policy if exists "own update" on public.qr_codes;
 drop policy if exists "own delete" on public.qr_codes;
+drop policy if exists "qr_codes_delete_own" on public.qr_codes;
 
 create policy "own select" on public.qr_codes
   for select using (auth.uid() = user_id);
@@ -36,8 +39,8 @@ create policy "own insert" on public.qr_codes
 create policy "own update" on public.qr_codes
   for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
-create policy "own delete" on public.qr_codes
-  for delete using (auth.uid() = user_id);
+create policy "qr_codes_delete_own" on public.qr_codes
+  for delete using (auth.uid() = user_id and batch_id is null);
 
 -- 3. Redireccion publica: quien escanea un QR no tiene sesion.
 -- SECURITY DEFINER con search_path fijo; solo devuelve el destino si el QR
