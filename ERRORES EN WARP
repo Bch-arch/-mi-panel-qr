@@ -1,0 +1,85 @@
+Voy a rastrear Date.now() y el recorrido de toggleQrStatus desde el formulario hasta Supabase. Revisaré la guía instalada de Next.js 16 para connection() y Cache Components; no tocaré SQL, RLS, empleados ni variables sensibles. Separaré lo que puedo comprobar localmente de las pruebas que requieren una sesión y un QR de prueba en Supabase.
+• Explored
+  └ Search Date\.now\(|new Date\(|toggleQrStatus|QrStatusButton|requireAdmin|ADMIN_USER_ID|connection\( in .
+    Read page.tsx
+    Read data.ts
+• Context compacted · 41s
+• Explored · 1 nonzero exit
+  └ Read connection.md, 08-caching.md, optimizing-prefetching.md, qr.ts, qr-status-button.tsx, auth.ts, data.ts, package.json (command exit 2)
+    List docs
+    Search optimizing-prefetching|cache-components|auth
+• Ran rg -n -C 4 'Date.now|use cache: private|auth helper|connection\(' node_modules/next/dist/docs/01-app/02-guides/authentication-with-cache-components.md node_modules/next/d…
+  └ node_modules/@supabase/auth-js/dist/main/GoTrueClient.js:2541:                ? currentSession.expires_at * 1000 - Date.now() < constants_1.EXPIRY_MARGIN_MS
+    node_modules/@supabase/auth-js/dist/main/GoTrueClient.js:2567:                    stored.expires_at * 1000 > Date.now()) {
+    8:  cacheComponents: true,
+• Explored · 1 nonzero exit
+  └ Read optimizing-prefetching.md
+    Read authentication-with-cache-components.md
+    Search unstable value Date.now|Date\.now in authentication-with-cache-components.md (command exit 1)
+Encontré el origen probable del error de renderizado: getQrCodes() valida la sesión mediante Supabase Auth, y la librería de Auth compara la expiración del token usando Date.now(). Aunque la página ya tiene Suspense, esa lectura debe arrancar explícitamente en tiempo de petición para que Next 16 no intente prerenderarla. En toggleQrStatus, todos los retornos de error del servidor incluyen message; el estado literal {"ok":false} coincide con el estado inicial del componente. Voy a corregir el límite de renderizado y luego ejecutar las comprobaciones; el motivo exacto del fallo de actualización requiere ver si la acción alcanza Supabase y qué respuesta devuelve en una sesión real.
+• Edited app/(panel)/page.tsx (+4 -0)
++import { connection } from "next/server";
+   ⋮
++  // Supabase Auth checks token expiry with Date.now(). Keep that request-time
+• Exited (status 129) git diff --check && git diff -- 'app/(panel)/page.tsx' && git status --short
+  └                           select files by diff type
+        --output <file>       output to a specific file
+    
+• Ran node -e 'for (const k of ["NEXT_PUBLIC_SUPABASE_URL","NEXT_PUBLIC_SUPABASE_ANON_KEY","NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY","ADMIN_USER_ID"]) console.log(`${k}=${process.…
+  └ NEXT_PUBLIC_SUPABASE_ANON_KEY=unset
+    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=unset
+    ADMIN_USER_ID=unset
+• Ran npx tsc --noEmit
+  └ (no output)
+• Ran npm run lint
+  └ > mi-panel-qr@0.1.0 lint
+    > eslint
+    
+• Exited (status 128) git rev-parse --show-toplevel
+  └ fatal: not a git repository (or any of the parent directories): .git
+• Explored
+  └ Search .env* in .
+    Search from\("qr_codes"\)|toggleQrStatus|requireAdmin|getCurrentUser in app
+• Exited (status 1) npm run build
+  └ 
+    
+        at ignore-listed frames
+• Ran node -e 'const {loadEnvConfig}=require("@next/env"); loadEnvConfig(process.cwd()); const id=process.env.ADMIN_USER_ID||""; console.log(JSON.stringify({adminConfigured:id.…
+  └ {"adminConfigured":true,"adminUuidValid":true}
+• Exited (status 1) npm run dev
+  └   port: 3000
+    }
+    
+• Ran sed -n '1,100p' 'app/(panel)/layout.tsx'; sed -n '1,80p' 'app/(panel)/configuracion/page.tsx'; find app -type f \( -name 'loading.tsx' -o -name 'layout.tsx' \) -print
+  └ app/layout.tsx
+    app/(panel)/layout.tsx
+    app/(auth)/layout.tsx
+• Explored
+  └ Read page.tsx
+    Read qr.ts
+    Read qr-status-button.tsx
+Corregí el problema de prerenderizado. El fallo de estado de toggleQrStatus quedó diagnosticado hasta donde permite el entorno, pero no puedo confirmar una actualización real en Supabase: no hay una sesión autenticada disponible y el servidor local no pudo iniciarse.
+
+### Cambios
+
+En page.tsx (app/(panel)/page.tsx:38), QrContent ahora espera connection() antes de consultar Supabase. La guía instalada de Next.js 16 indica usarlo cuando valores variables por petición —como Date.now()— no deben ejecutarse durante el prerenderizado. La página ya tiene un límite Suspense; mantuve Cache Components activado.
+
+No encontré llamadas explícitas a Date.now() en la aplicación. Supabase Auth sí lo usa internamente para comprobar la expiración de la sesión. Los new Date(iso) de formato y los new Date().toISOString() de las acciones son usos distintos: los primeros procesan fechas guardadas y los segundos ocurren durante una acción.
+
+### toggleQrStatus
+
+La acción valida requireAdmin() con auth.getUser() y el UUID configurado, valida los datos y actualiza con filtros por id y user_id. Además, la consulta sigue sujeta a RLS. No quité ni relajé esas protecciones.
+
+En el código, la acción no devuelve literalmente {ok:false} sin más: sus respuestas de error incluyen message. Ese objeto coincide exactamente con el estado inicial de QrStatusButton. Por eso, si ese es el estado observado, no demuestra que Supabase haya rechazado la actualización; indica que el componente conserva su estado inicial. Si la acción sí llegó a ejecutarse, los errores de Supabase se muestran con un mensaje genérico y el código actual no permite distinguir su causa exacta.
+
+No cambié el flujo de actualización porque no pude reproducir una operación con una sesión real ni identificar un fallo de permisos concreto. El UUID administrativo está configurado y tiene formato válido; no expuse su valor.
+
+### Comprobaciones
+
+- ESLint: correcto.
+- TypeScript (npx tsc --noEmit): correcto.
+- Build: bloqueado porque el entorno no pudo descargar Geist y Geist Mono de Google Fonts. No cambié las fuentes.
+- Prueba local autenticada de carga y cambio de estado: no realizada. next dev no pudo abrir el puerto 3000 (EPERM), y no dispongo de una sesión autenticada para comprobar la operación en Supabase.
+- Protección contra usuarios no autorizados: revisada en código. requireAdmin() redirige si no hay sesión o si el UUID no coincide; la acción también filtra por user_id. No pude hacer una prueba de sesión real.
+
+No ejecuté SQL, no cambié políticas RLS ni modifiqué employees o QR existentes. Para confirmar el problema de estado falta reproducirlo con el panel abierto y observar el mensaje visible del botón o el resultado de la petición autenticada.
