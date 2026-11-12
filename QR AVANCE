@@ -1,0 +1,104 @@
+Voy a revisar el código y el esquema actuales, incluyendo autenticación, políticas, acciones de QR, redirección pública y componentes del panel. Mantendré la revisión en modo lectura y separaré lo que ya existe de las decisiones de diseño que aún no están definidas.
+• Explored
+  └ List rg --files -g '!node_modules/**' -g '!**/.git/**'
+    Read schema.sql
+    Read qr.ts
+# Diagnóstico actual
+
+## Next.js y panel
+
+El proyecto usa App Router: páginas y layouts viven en app/; las operaciones de QR se hacen con Server Actions y Route Handlers. Supabase tiene clientes separados para navegador, servidor y uso público.
+
+El panel está orientado a administrar QR: muestra totales y un listado, y permite crear, editar, pausar, descargar y eliminar códigos. La navegación responsive tiene secciones para “Mis QR”, “Crear QR” y “Configuración”. No hay todavía navegación ni vistas de negocios o etiquetas NFC.
+
+## Base de datos y RLS
+
+Según las comprobaciones que confirmaste, Supabase tiene public.employees, public.qr_codes y resolve_qr(text). El código no usa employees.
+
+La tabla QR conserva propiedad individual mediante user_id, que referencia auth.users. No existe una relación con negocios ni hay tabla NFC. El RPC resuelve un QR activo por su código, incrementa su contador y devuelve su destino.
+
+Hay una discrepancia relevante: el archivo local supabase/schema.sql (supabase/schema.sql:1) conserva la versión anterior, con políticas own ... y CREATE OR REPLACE FUNCTION. No refleja el SQL definitivo que confirmaste haber aplicado. El repositorio, por tanto, no es todavía una representación fiel de la estructura desplegada.
+
+## Acceso administrativo
+
+El acceso actual no está restringido a una única cuenta:
+
+- Existe una página y un formulario de registro público.
+- La protección actual exige una sesión.
+- Las políticas QR son de propietario: cualquier usuario autenticado autorizado por esas políticas puede administrar sus propias filas.
+
+Eso mantiene aislamiento entre usuarios, pero no cumple por sí solo el requisito de que solo tu cuenta gestione negocios y datos si pueden registrarse otras cuentas. Este control debe abordarse antes de añadir datos de negocios.
+
+# Diseño propuesto
+
+## 1. Una capa explícita de administrador
+
+Deshabilitar el registro público en Supabase Auth y comprobar que solo exista la cuenta administrativa prevista. Además, añadir una autorización de administrador en servidor y RLS; ocultar botones o proteger rutas en la interfaz no basta.
+
+Una opción para identificar al administrador es una marca confiable en app_metadata, por ejemplo role = admin, que el usuario no pueda asignarse desde el cliente. Las Server Actions y las lecturas privadas validarían esa marca. RLS aplicaría el mismo requisito.
+
+La tabla QR ya tiene políticas permisivas por propietario. Añadir otra política permisiva de administrador no las restringiría: las permisivas pueden combinarse. Al implantar el control de administrador habrá que ajustar las políticas existentes o añadir un control RLS restrictivo que se combine con ellas. La ruta pública de escaneo es una excepción intencional: los visitantes necesitan resolver códigos activos, pero no administrar los registros.
+
+## 2. Tabla businesses y relación con QR
+
+Crear una tabla businesses para registrar cada negocio después de confirmar la venta. El conjunto inicial de campos debería ser pequeño —por ejemplo, identificador, nombre y fechas— y se deben acordar antes de implementar los datos de contacto, notas y estado.
+
+Añadir a qr_codes un business_id que referencie businesses. Recomiendo que admita NULL inicialmente:
+
+- No obliga a inventar negocios para QR existentes.
+- No altera sus códigos ni sus enlaces publicados.
+- Permite asignar QR existentes a un negocio más adelante.
+- Los nuevos QR creados desde un negocio sí deberían guardar su business_id.
+
+Mantendría user_id y el código único actuales durante esta fase. Así se preserva el comportamiento existente y queda documentada una posible migración futura hacia propiedad por cuenta u organización.
+
+## 3. Etiquetas NFC
+
+Recomiendo una tabla separada nfc_tags, vinculada con businesses, con identificador, nombre de la etiqueta, código público, destino, estado, contador y fechas.
+
+Cada etiqueta física guardaría un enlace estable, por ejemplo https://dominio-publico/n/<codigo>. Una nueva ruta pública resolvería ese código y redirigiría al destino actual. Esto permite cambiar el destino sin reescribir el chip y contar escaneos NFC por separado. No reutilizaría resolve_qr: actualmente busca en qr_codes y no distinguiría el canal NFC.
+
+Queda por decidir si una etiqueta NFC debe tener un destino independiente o si debe apuntar al mismo destino lógico que un QR. La propuesta anterior mantiene destinos y estadísticas separados por medio.
+
+## 4. Estadísticas por negocio
+
+Hoy solo existe un contador acumulado scans por QR; no se guardan eventos con fecha, dispositivo o ubicación. Al añadir contadores NFC, el panel podría mostrar por negocio:
+
+- cantidad total y activa de QR;
+- cantidad de etiquetas NFC;
+- escaneos QR acumulados;
+- escaneos NFC acumulados;
+- total combinado.
+
+Con el volumen personal actual, se pueden calcular los totales a partir de las filas de cada negocio. Para gráficas temporales haría falta registrar eventos o agregados diarios; no lo incorporaría hasta confirmar que realmente se necesita, porque implica más almacenamiento y tratamiento de datos.
+
+## 5. Panel responsive
+
+Añadiría una sección “Negocios” con un listado y una vista de detalle por negocio. Esa vista reuniría resumen, QR y etiquetas NFC. La creación de un negocio sería una acción manual del administrador tras confirmar la venta; no añadiría integración de ventas ni CRM.
+
+Mantendría las pantallas actuales de QR y las adaptaría para filtrar por negocio, sin reemplazar el listado general. Reutilizaría el diseño responsive del panel para que las acciones funcionen desde PC y teléfono. Los dueños de tiendas no recibirían acceso al panel.
+
+# Plan de implementación por etapas
+
+1. Restringir administración: verificar la cuenta administradora, cerrar el registro público y diseñar la autorización de administrador en servidor y RLS.
+2. Añadir negocios de forma aditiva: crear businesses, añadir relación nullable desde QR y conservar registros, códigos y rutas actuales.
+3. Administrar QR por negocio: crear negocios manualmente tras una venta, asociar nuevos QR y permitir asignar QR existentes.
+4. Añadir NFC: definir el comportamiento de destino, crear la tabla y el resolver público propio, conservando QR sin cambios.
+5. Mostrar estadísticas básicas: agregar los contadores existentes por negocio y separar QR de NFC. Aplazar métricas temporales.
+6. Sincronizar documentación y esquema: versionar el SQL que refleje realmente Supabase y registrar los cambios de RLS y sus comprobaciones.
+
+No hay pagos ni suscripciones en este plan.
+
+## Dependencia antes de imprimir QR o programar etiquetas
+
+Sigue pendiente la configuración de una URL pública canónica para los QR. El generador actual puede codificar el origen de la petición y producir localhost en desarrollo. Antes de imprimir o programar medios que se entregarán a un negocio, conviene resolver esa configuración para QR y NFC; los enlaces impresos no se corrigen al cambiar el dominio después.
+
+## Decisiones que conviene cerrar
+
+- Qué datos mínimos de un negocio se necesitan y qué significa archivarlo o pausarlo.
+- Si las etiquetas NFC comparten destino con un QR o tienen destinos independientes.
+- Si las estadísticas necesarias son solo contadores acumulados o también tendencias temporales.
+- Cómo identificar de forma confiable la cuenta administradora y bloquear registros nuevos.
+- Cómo gestionar los QR actuales que todavía no pertenecen a ningún negocio.
+
+No modifiqué archivos ni ejecuté SQL.
