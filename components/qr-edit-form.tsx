@@ -41,6 +41,24 @@ export default function QrEditForm({ qr }: { qr: QrCode }) {
       </div>
 
       <div className="flex flex-col gap-1.5">
+        <label htmlFor="storeName" className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
+          Tienda asignada (opcional)
+        </label>
+        <input
+          id="storeName"
+          name="storeName"
+          type="text"
+          maxLength={120}
+          defaultValue={qr.storeName ?? ""}
+          aria-invalid={Boolean(state.errors?.storeName)}
+          className="w-full rounded-lg border border-zinc-300 bg-white px-3.5 py-2.5 text-sm text-zinc-900 outline-none transition-colors placeholder:text-zinc-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500"
+        />
+        {state.errors?.storeName && (
+          <p className="text-xs text-red-600 dark:text-red-400">{state.errors.storeName}</p>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-1.5">
         <label htmlFor="destination" className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
           URL de destino
         </label>
@@ -48,7 +66,7 @@ export default function QrEditForm({ qr }: { qr: QrCode }) {
           id="destination"
           name="destination"
           type="url"
-          defaultValue={qr.destination}
+          defaultValue={qr.destination ?? ""}
           aria-invalid={Boolean(state.errors?.destination)}
           className="w-full rounded-lg border border-zinc-300 bg-white px-3.5 py-2.5 text-sm text-zinc-900 outline-none transition-colors placeholder:text-zinc-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500"
         />

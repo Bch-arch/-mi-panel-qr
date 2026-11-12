@@ -38,6 +38,15 @@ function SettingsIcon({ className }: IconProps) {
   );
 }
 
+function InventoryIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className={className} aria-hidden="true">
+      <path d="m3 7 9-4 9 4-9 4-9-4Z" strokeLinejoin="round" />
+      <path d="M3 7v10l9 4 9-4V7M12 11v10M7.5 5l9 4" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function MenuIcon({ className }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className={className} aria-hidden="true">
@@ -57,6 +66,7 @@ function CloseIcon({ className }: IconProps) {
 const navItems = [
   { href: "/", label: "Mis QR", icon: QrIcon },
   { href: "/crear", label: "Crear QR", icon: PlusIcon },
+  { href: "/inventario", label: "Inventario", icon: InventoryIcon },
   { href: "/configuracion", label: "Configuración", icon: SettingsIcon },
 ];
 

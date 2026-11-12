@@ -140,3 +140,39 @@ export function getPublicQrUrl(code: string): string {
   const baseUrl = getQrPublicBaseUrl();
   return new URL(`/r/${encodeURIComponent(code)}`, baseUrl).toString();
 }
+
+// Los códigos de una tirada física quedan impresos y no se pueden corregir.
+// Exigimos un origen de producción HTTPS explícito incluso al ejecutar en dev.
+export function getPrintQrUrl(code: string): string {
+  const configuredUrl = process.env.QR_PUBLIC_BASE_URL?.trim();
+  if (!configuredUrl) {
+    throw new QrPublicUrlConfigurationError(
+      "Configura QR_PUBLIC_BASE_URL con el dominio HTTPS de producción antes de exportar un lote para impresión.",
+    );
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(configuredUrl);
+  } catch {
+    throw new QrPublicUrlConfigurationError(
+      "QR_PUBLIC_BASE_URL debe ser un origen HTTPS válido para imprimir.",
+    );
+  }
+
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username ||
+    parsed.password ||
+    (parsed.pathname !== "/" && parsed.pathname !== "") ||
+    parsed.search ||
+    parsed.hash ||
+    isLocalHostname(parsed.hostname)
+  ) {
+    throw new QrPublicUrlConfigurationError(
+      "Los QR de impresión requieren un origen HTTPS público, sin rutas, credenciales ni parámetros.",
+    );
+  }
+
+  return new URL(`/r/${encodeURIComponent(code)}`, parsed.origin).toString();
+}

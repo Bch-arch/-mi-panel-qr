@@ -1,5 +1,7 @@
--- Esquema y seguridad para la etapa 1 (auth + persistencia multiusuario).
--- Ejecutar en Supabase -> SQL Editor. Es idempotente: se puede reejecutar.
+-- Esquema base y seguridad (auth + persistencia multiusuario).
+-- En instalaciones existentes, no volver a ejecutar para "actualizar" datos:
+-- aplicar las migraciones versionadas de supabase/migrations en su lugar.
+-- El inventario por lotes se añade mediante 202611120001_qr_inventory_batches.sql.
 
 -- 1. Tabla de codigos QR.
 create table if not exists public.qr_codes (

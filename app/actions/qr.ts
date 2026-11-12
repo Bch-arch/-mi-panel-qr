@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAdmin } from "@/lib/auth";
 import { MAX_QR_PER_USER, type QrStatus } from "@/lib/qr-types";
+import { getPrintQrUrl, QrPublicUrlConfigurationError } from "@/lib/qr-public-url";
 import { createClient } from "@/lib/supabase/server";
 
 export type CreateQrState = {
@@ -13,6 +14,12 @@ export type CreateQrState = {
     name?: string;
     destination?: string;
   };
+};
+
+export type CreateQrBatchState = {
+  ok: boolean;
+  message?: string;
+  batchId?: string;
 };
 
 const SLUG_ALPHABET =
@@ -27,6 +34,10 @@ function generateSlug(length = 8): string {
   return slug;
 }
 
+function generateBatchCodes(quantity: number): string[] {
+  return Array.from({ length: quantity }, () => generateSlug(12));
+}
+
 function isValidUrl(value: string): boolean {
   try {
     const url = new URL(value);
@@ -34,6 +45,120 @@ function isValidUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+export async function createQrBatch(
+  _prevState: CreateQrBatchState,
+  formData: FormData,
+): Promise<CreateQrBatchState> {
+  await requireAdmin();
+
+  const name = String(formData.get("name") ?? "").trim();
+  const quantity = Number(formData.get("quantity"));
+  if (!name || name.length > 80) {
+    return { ok: false, message: "El nombre del lote debe tener entre 1 y 80 caracteres." };
+  }
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > MAX_QR_PER_USER) {
+    return { ok: false, message: `La cantidad debe estar entre 1 y ${MAX_QR_PER_USER}.` };
+  }
+
+  try {
+    getPrintQrUrl("preflight-check");
+  } catch (error) {
+    return {
+      ok: false,
+      message:
+        error instanceof QrPublicUrlConfigurationError
+          ? error.message
+          : "No se pudo validar el dominio público de impresión.",
+    };
+  }
+
+  const supabase = await createClient();
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const { data, error } = await supabase.rpc("create_qr_batch", {
+      p_name: name,
+      p_quantity: quantity,
+      p_codes: generateBatchCodes(quantity),
+    });
+
+    if (!error && typeof data === "string") {
+      revalidatePath("/inventario");
+      revalidatePath("/");
+      return { ok: true, batchId: data, message: "Lote creado. Descarga el paquete y su CSV." };
+    }
+
+    if (error?.code === "23505") continue;
+    if (error?.code === "23514") {
+      return { ok: false, message: "El lote supera el límite actual de 50 códigos QR." };
+    }
+    if (error?.code === "PGRST202") {
+      return {
+        ok: false,
+        message: "Falta aplicar la migración SQL de inventario en Supabase.",
+      };
+    }
+    return {
+      ok: false,
+      message: "No se pudo crear el lote. Verifica la migración SQL y vuelve a intentarlo.",
+    };
+  }
+
+  return { ok: false, message: "No se pudieron generar códigos únicos. Inténtalo de nuevo." };
+}
+
+export type AssignQrState = {
+  ok: boolean;
+  message?: string;
+  errors?: { storeName?: string; destination?: string };
+};
+
+export async function assignQr(
+  _prevState: AssignQrState,
+  formData: FormData,
+): Promise<AssignQrState> {
+  const user = await requireAdmin();
+  const id = String(formData.get("id") ?? "").trim();
+  const storeName = String(formData.get("storeName") ?? "").trim();
+  const destination = String(formData.get("destination") ?? "").trim();
+  const requestedStatus = String(formData.get("status") ?? "pausado");
+  const errors: NonNullable<AssignQrState["errors"]> = {};
+
+  if (!storeName || storeName.length > 120) {
+    errors.storeName = "Introduce una tienda (máximo 120 caracteres).";
+  }
+  if (!isValidUrl(destination)) {
+    errors.destination = "Introduce una URL válida que empiece por http:// o https://.";
+  }
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+  if (!id || !["activo", "pausado"].includes(requestedStatus)) {
+    return { ok: false, message: "Datos de asignación no válidos." };
+  }
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("qr_codes")
+    .update({
+      store_name: storeName,
+      destination,
+      inventory_status: "asignado",
+      status: requestedStatus,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    return { ok: false, message: "No se pudo asignar el QR. Inténtalo de nuevo." };
+  }
+  if (!data) return { ok: false, message: "Código QR no encontrado." };
+
+  revalidatePath("/inventario");
+  revalidatePath("/");
+  revalidatePath(`/editar/${id}`);
+  return { ok: true, message: "Tienda y destino guardados. La URL impresa no cambió." };
 }
 
 export async function createQr(
@@ -53,7 +178,7 @@ export async function createQr(
     errors.destination =
       "Introduce una URL válida que empiece por http:// o https://.";
   }
-  if (errors.name || errors.destination) {
+  if (Object.keys(errors).length > 0) {
     return { ok: false, errors };
   }
 
@@ -106,6 +231,7 @@ export type UpdateQrState = {
   errors?: {
     name?: string;
     destination?: string;
+    storeName?: string;
   };
 };
 
@@ -120,6 +246,7 @@ export async function updateQr(
   const id = String(formData.get("id") ?? "");
   const name = String(formData.get("name") ?? "").trim();
   const destination = String(formData.get("destination") ?? "").trim();
+  const storeName = String(formData.get("storeName") ?? "").trim();
   const status = String(formData.get("status") ?? "activo") as QrStatus;
 
   const errors: UpdateQrState["errors"] = {};
@@ -130,6 +257,9 @@ export async function updateQr(
     errors.destination =
       "Introduce una URL válida que empiece por http:// o https://.";
   }
+  if (storeName.length > 120) {
+    errors.storeName = "La tienda no puede superar 120 caracteres.";
+  }
   if (errors.name || errors.destination) {
     return { ok: false, errors };
   }
@@ -139,6 +269,22 @@ export async function updateQr(
 
   const supabase = await createClient();
 
+  const { data: existing, error: lookupError } = await supabase
+    .from("qr_codes")
+    .select("inventory_status, store_name")
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (lookupError || !existing) {
+    return { ok: false, message: "Código QR no encontrado." };
+  }
+  if (existing.inventory_status === "disponible" && !storeName) {
+    return {
+      ok: false,
+      errors: { storeName: "Indica la tienda para asignar este QR del inventario." },
+    };
+  }
+
   // El filtro por user_id es defensa en profundidad; RLS ya lo garantiza.
   const { data, error } = await supabase
     .from("qr_codes")
@@ -146,6 +292,8 @@ export async function updateQr(
       name,
       destination,
       status,
+      store_name: storeName || existing.store_name,
+      inventory_status: "asignado",
       updated_at: new Date().toISOString(),
     })
     .eq("id", id)
@@ -163,6 +311,7 @@ export async function updateQr(
   }
 
   revalidatePath("/");
+  revalidatePath("/inventario");
   redirect("/");
 }
 
@@ -183,6 +332,22 @@ export async function deleteQr(
   }
 
   const supabase = await createClient();
+  const { data: existing, error: lookupError } = await supabase
+    .from("qr_codes")
+    .select("batch_id")
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (lookupError || !existing) {
+    return { ok: false, message: "Código QR no encontrado." };
+  }
+  if (existing.batch_id) {
+    return {
+      ok: false,
+      message: "Las unidades de un lote de impresión se conservan para mantener el inventario y sus archivos completos.",
+    };
+  }
+
   const { data, error } = await supabase
     .from("qr_codes")
     .delete()
@@ -216,13 +381,15 @@ export async function toggleQrStatus(
   }
 
   const supabase = await createClient();
-  const { data, error } = await supabase
+  let updateQuery = supabase
     .from("qr_codes")
     .update({ status: nextStatus, updated_at: new Date().toISOString() })
     .eq("id", id)
-    .eq("user_id", user.id)
-    .select("id")
-    .maybeSingle();
+    .eq("user_id", user.id);
+  if (nextStatus === "activo") {
+    updateQuery = updateQuery.eq("inventory_status", "asignado").not("destination", "is", null);
+  }
+  const { data, error } = await updateQuery.select("id").maybeSingle();
 
   if (error) {
     return { ok: false, message: "No se pudo actualizar el estado. Inténtalo de nuevo." };

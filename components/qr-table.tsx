@@ -46,8 +46,12 @@ function RowActions({ qr }: { qr: QrCode }) {
       <Link href={`/editar/${qr.id}`} className={actionLink}>
         Editar
       </Link>
-      <QrStatusButton id={qr.id} isActive={isActive} className={actionLink} />
-      <QrDeleteButton id={qr.id} className={actionLink} />
+      {qr.inventoryStatus === "disponible" ? (
+        <span className="px-2 text-xs text-zinc-500">Sin asignar</span>
+      ) : (
+        <QrStatusButton id={qr.id} isActive={isActive} className={actionLink} />
+      )}
+      {qr.batchId ? <span className="px-2 text-xs text-zinc-500">Unidad de lote</span> : <QrDeleteButton id={qr.id} className={actionLink} />}
     </div>
   );
 }
@@ -80,8 +84,8 @@ export default function QrTable({ items }: { items: QrCode[] }) {
                 </span>
               </td>
               <td className="max-w-[260px] px-4 py-3.5">
-                <span className="block truncate text-zinc-600 dark:text-zinc-400" title={qr.destination}>
-                  {qr.destination}
+                <span className="block truncate text-zinc-600 dark:text-zinc-400" title={qr.destination ?? "Pendiente de asignación"}>
+                  {qr.destination ?? "Pendiente de asignación"}
                 </span>
               </td>
               <td className="whitespace-nowrap px-4 py-3.5 text-zinc-600 dark:text-zinc-400">
@@ -109,8 +113,8 @@ export default function QrTable({ items }: { items: QrCode[] }) {
                 <p className="truncate font-medium text-zinc-900 dark:text-zinc-100">
                   {qr.name}
                 </p>
-                <p className="mt-0.5 truncate text-sm text-zinc-500 dark:text-zinc-400" title={qr.destination}>
-                  {qr.destination}
+                <p className="mt-0.5 truncate text-sm text-zinc-500 dark:text-zinc-400" title={qr.destination ?? "Pendiente de asignación"}>
+                  {qr.destination ?? "Pendiente de asignación"}
                 </p>
               </div>
               <StatusBadge status={qr.status} />
@@ -129,12 +133,16 @@ export default function QrTable({ items }: { items: QrCode[] }) {
               <Link href={`/editar/${qr.id}`} className={actionLink}>
                 Editar
               </Link>
-              <QrStatusButton
-                id={qr.id}
-                isActive={qr.status === "activo"}
-                className={actionLink}
-              />
-              <QrDeleteButton id={qr.id} className={actionLink} />
+              {qr.inventoryStatus === "disponible" ? (
+                <span className="px-2 text-xs text-zinc-500">Sin asignar</span>
+              ) : (
+                <QrStatusButton
+                  id={qr.id}
+                  isActive={qr.status === "activo"}
+                  className={actionLink}
+                />
+              )}
+              {qr.batchId ? <span className="px-2 text-xs text-zinc-500">Unidad de lote</span> : <QrDeleteButton id={qr.id} className={actionLink} />}
             </div>
           </li>
         ))}

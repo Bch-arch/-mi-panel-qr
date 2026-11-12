@@ -3,11 +3,24 @@ export type QrStatus = "activo" | "pausado" | "borrador";
 export interface QrCode {
   id: string;
   name: string;
-  destination: string;
+  destination: string | null;
   code: string;
   createdAt: string;
   status: QrStatus;
   scans: number;
+  batchId: string | null;
+  unitNumber: number | null;
+  storeName: string | null;
+  inventoryStatus: QrInventoryStatus;
+}
+
+export type QrInventoryStatus = "disponible" | "asignado";
+
+export interface QrBatch {
+  id: string;
+  name: string;
+  quantity: number;
+  createdAt: string;
 }
 
 // Limite de QR por usuario. La comprobacion se hace en el servidor;
