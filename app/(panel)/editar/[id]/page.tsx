@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { connection } from "next/server";
 import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -36,6 +37,9 @@ export default function EditarQrPage({
 }
 
 async function EditContent({ params }: { params: Promise<{ id: string }> }) {
+  // La validación de sesión de Supabase Auth consulta Date.now(). Ejecutamos
+  // ese trabajo en la petición, fuera del prerender estático de Cache Components.
+  await connection();
   const { id } = await params;
 
   const qr = await getQrById(id);
