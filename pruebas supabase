@@ -1,0 +1,25 @@
+Voy a contrastar el código que accede a Supabase con todos los SQL, migraciones y referencias a tablas del repositorio. La revisión será de solo lectura: no consultaré ni modificaré la base remota y no ejecutaré SQL.
+• Explored
+  └ List rg --files -g '!node_modules' -g '!**/.git/**'
+    Search \.from\(|\.rpc\(|create table|create or replace function|references public\.|references auth\. in .
+    List rg --files --hidden -g '!node_modules/**' -g '!**/.git/**' -g '*.sql' -g 'supabase/migrations/**' -g supabase/config.toml -g '!**/.next/**'
+## Hallazgos
+
+1. Hay un único archivo SQL: supabase/schema.sql (supabase/schema.sql). No encontré carpeta supabase/migrations/, archivos de migración ni supabase/config.toml. El comentario del archivo indica que debe ejecutarse manualmente; tenerlo en el repositorio no significa que se haya aplicado.
+2. El archivo define public.qr_codes con propietario user_id, destino, código corto, estado y contador, además de RLS y la función resolve_qr. La definición está en schema.sql:5 (supabase/schema.sql:5); la función está en schema.sql:43 (supabase/schema.sql:43).
+3. El código actual espera una sola tabla de aplicación: public.qr_codes. Las lecturas, altas, cambios de estado, edición, eliminación y descarga consultan esa tabla. La redirección pública usa además la función RPC resolve_qr. No encontré referencias a employees. Supabase Auth también usa su esquema gestionado —por ejemplo, el archivo SQL referencia auth.users—, pero no es una tabla de aplicación que este proyecto deba crear.
+4. public.employees no satisface esas dependencias. No aparece en el código y no reemplaza a qr_codes. Si realmente estás viendo el proyecto y esquema correctos en Supabase, falta aplicar la estructura de QR que el código espera. También cabe la posibilidad de que la aplicación esté configurada para otro proyecto Supabase.
+
+## Consecuencias probables
+
+Con public.qr_codes y resolve_qr ausentes, el panel no podrá listar ni guardar QR. La redirección pública no podrá resolver códigos y mostrará el estado de QR no disponible. El registro e inicio de sesión pueden funcionar por separado, porque usan Supabase Auth.
+
+No consulté la base remota; estas consecuencias se deducen de las llamadas del código y del estado que indicaste.
+
+## Siguiente paso más seguro
+
+Antes de aplicar nada, confirma solo de lectura que el proyecto Supabase abierto es el mismo al que apuntan los entornos local y publicado. Compara el identificador del proyecto en la URL NEXT_PUBLIC_SUPABASE_URL localmente con el del Dashboard, sin compartir la clave ni publicar valores del entorno. Revisa también la configuración de entorno del despliegue: puede apuntar a otro proyecto.
+
+Si el proyecto coincide y public.qr_codes sigue ausente, el paso siguiente sería revisar juntos los efectos de schema.sql y preparar un proceso de migración reproducible. El script no solo crea la tabla: también activa RLS, reemplaza políticas con esos nombres y crea o reemplaza resolve_qr. No lo ejecutes hasta confirmar el proyecto y autorizar expresamente ese cambio.
+
+No modifiqué archivos, no ejecuté SQL ni realicé migraciones.
