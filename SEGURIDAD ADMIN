@@ -1,0 +1,105 @@
+Voy a revisar autenticación, proxy, rutas y Server Actions, todos los clientes Supabase y el SQL versionado. No leeré valores de .env.local, no modificaré archivos y no ejecutaré SQL; distinguiré lo que demuestra el repositorio de lo que requiere confirmar en el Dashboard de Supabase.
+• Ran rg -n "auth\.|requireUser|getCurrentUser|createClient|createPublicClient|user_metadata|app_metadata|service_role|SUPABASE_.*KEY|NEXT_PUBLIC_.*KEY|from\(\"qr_codes\"\)|rpc…
+  └     <aside className="hidden w-64 shrink-0 border-r border-zinc-200 bg-white md:block dark:border-zinc-800 dark:bg-zinc-950" />
+      );
+    }
+# Diagnóstico
+
+## Autenticación actual
+
+- El inicio de sesión usa Supabase Auth con correo y contraseña en el cliente. El registro también está implementado públicamente mediante signUp() en components/auth/register-form.tsx (components/auth/register-form.tsx:20).
+- proxy.ts (proxy.ts:1) delega en updateSession(), que valida la sesión con auth.getUser(). Redirige al login a usuarios anónimos y permite /login, /registro, /r/*, /auth/* y la página de QR no disponible.
+- lib/auth.ts (lib/auth.ts:8) comprueba si hay un usuario autenticado, pero devuelve solo su ID y correo. No existe actualmente una identificación o autorización específica de administrador.
+- Las Server Actions de QR llaman a requireUser(), que exige sesión, pero no que el usuario sea administrador. Por tanto, cualquier cuenta autenticada puede invocarlas para administrar sus propios QR.
+- Las políticas RLS actuales descritas por el esquema limitan filas a auth.uid() = user_id. Esto evita que un usuario acceda a QR de otro, pero no limita el sistema a tu cuenta.
+
+## Rutas y acceso a datos
+
+El proxy protege las rutas privadas del panel. Además, las lecturas de QR exigen usuario; las acciones de crear, editar, cambiar estado y eliminar también lo hacen. La descarga vuelve a validar la sesión y filtra por propietario.
+
+Esas comprobaciones protegen frente a usuarios sin sesión y frente al acceso cruzado entre propietarios, pero no distinguen al administrador de otra persona que se registre. La autorización en el layout o en los botones no basta para proteger llamadas directas a una Server Action o a Supabase.
+
+La ruta /r/[slug] es deliberadamente pública: usa un cliente Supabase sin sesión e invoca resolve_qr. Esa excepción debe conservarse para que los QR sigan funcionando.
+
+## Claves de Supabase
+
+En el código revisado, los clientes usan NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY. No encontré referencias a service_role ni a una clave secreta en el código fuente. No leí valores de .env.local; tampoco puedo determinar desde aquí qué variables están configuradas en el despliegue. La clave publishable puede estar en el navegador; la protección depende de RLS.
+
+## Esquema versionado
+
+El supabase/schema.sql del repositorio todavía contiene la definición anterior de las políticas por propietario. No representa exactamente el SQL definitivo que confirmaste haber aplicado en Supabase. Deberá actualizarse con una migración aprobada para que el estado desplegado y el control de versiones no diverjan.
+
+# Cambios propuestos
+
+La alternativa más simple para esta fase es identificar al administrador mediante el UUID de su cuenta actual de Auth, guardado en una variable de servidor ADMIN_USER_ID y en las políticas RLS. El UUID no es una clave secreta, pero no se debe exponer como variable pública. Esta opción evita depender de user_metadata o de metadatos editables desde el cliente y no requiere una tabla de roles para un solo administrador.
+
+## A. Cambios en Next.js
+
+- Crear una comprobación server-side requireAdmin() que valide la sesión con auth.getUser() y compare su ID con ADMIN_USER_ID. Si la variable falta, la aplicación debe denegar el acceso.
+- Usar esa comprobación en las lecturas privadas, todas las Server Actions de QR y la ruta de descarga. Así se protege cada operación aunque se invoque directamente.
+- Actualizar el proxy para evitar que usuarios autenticados pero no administradores entren al panel. El proxy complementa, pero no reemplaza, las comprobaciones en servidor y RLS.
+- Cerrar la interfaz de registro: retirar enlaces públicos y presentar una indicación de registro cerrado. La barrera efectiva de creación debe estar también en Supabase Auth.
+- Mantener intactas las rutas públicas de resolución QR y callback de Auth.
+- No crear un cliente Supabase con clave de servicio.
+
+## B. Cambios en Supabase
+
+- Confirmar el UUID de tu cuenta existente y que puedes iniciar sesión y recuperar la cuenta antes de cambiar ajustes.
+- Desactivar el registro público de nuevos usuarios. Esto impide nuevas altas; no deshabilita el inicio de sesión de la cuenta actual. Antes de hacerlo, confirmar en Auth que la cuenta administradora existe y está en estado utilizable.
+- Revisar si existen otras cuentas. No borrarlas: el control RLS propuesto las dejaría sin acceso administrativo.
+- Mantener employees, sus datos y sus políticas sin cambios.
+- Mantener disponible la ejecución anónima de resolve_qr(text) para escaneos; no conceder acceso directo de anon a qr_codes.
+
+## C. SQL de migración propuesto
+
+Las políticas actuales por propietario permiten que cualquier usuario autenticado gestione sus propias filas. Para limitarlo a un solo administrador sin borrar esas políticas, propongo añadir una política restrictiva de administrador y una política permisiva que habilite al administrador a gestionar la tabla completa.
+
+El siguiente fragmento es una propuesta, no debe ejecutarse literalmente: hay que sustituir ADMIN_USER_UUID por el UUID confirmado y comprobar que los nombres de las políticas aún no existen.
+
+begin;
+
+create policy qr_codes_admin_gate
+  on public.qr_codes
+  as restrictive
+  for all
+  to authenticated
+  using (auth.uid() = 'ADMIN_USER_UUID'::uuid)
+  with check (auth.uid() = 'ADMIN_USER_UUID'::uuid);
+
+create policy qr_codes_admin_allow
+  on public.qr_codes
+  as permissive
+  for all
+  to authenticated
+  using (auth.uid() = 'ADMIN_USER_UUID'::uuid)
+  with check (auth.uid() = 'ADMIN_USER_UUID'::uuid);
+
+commit;
+
+La política restrictiva se combina con las políticas permisivas existentes y bloquea a usuarios que no sean el administrador. La permisiva habilita al administrador a operar QR aunque una fila esté asociada a otro user_id. Las políticas existentes no se eliminan ni reemplazan. Si los nombres propuestos ya existieran, la migración debería detenerse para revisión, no usar DROP POLICY.
+
+Este fragmento solo afecta a public.qr_codes; no contiene cambios a employees, permisos de tabla ni resolve_qr. La condición de administrador se duplica en Next.js y RLS, así que las comprobaciones deben confirmar que ADMIN_USER_ID y el UUID del SQL coinciden.
+
+## D. Pruebas de seguridad
+
+Antes y después del cambio, comprobar en un entorno controlado:
+
+- La cuenta administradora puede iniciar sesión y operar sus QR.
+- Una sesión cerrada no puede abrir el panel, invocar acciones ni descargar QR.
+- Otra cuenta autenticada no puede listar, crear, editar, cambiar estado, descargar ni eliminar QR, ni siquiera enviando solicitudes directas.
+- Los QR existentes siguen listándose y funcionando; no se borran.
+- Un usuario no administrador no puede leer o modificar filas mediante la API de Supabase.
+- Un escaneo anónimo de un QR activo sigue resolviendo su destino y uno pausado o inexistente sigue yendo a la página de no disponible.
+- Un visitante no puede crear cuentas nuevas; la cuenta actual sigue pudiendo iniciar sesión.
+- employees conserva tabla, registros y políticas sin cambios.
+- No hay variables de clave secreta expuestas en código cliente ni claves privilegiadas en el navegador.
+
+# Riesgos que conviene resolver antes de implementar
+
+1. Posible bloqueo de acceso: falta confirmar el UUID de la cuenta administradora y probar que puede iniciar sesión y recuperar acceso. No se debe desplegar una comprobación que falle cerrada sin configurar ADMIN_USER_ID.
+2. Registro público activo: si se cierra solo la página, aún se podría intentar signUp() directamente. Debe desactivarse también en Supabase Auth.
+3. Divergencia SQL: el esquema versionado no coincide con la estructura que confirmaste aplicada. No conviene reejecutar el archivo actual como si fuera la migración de seguridad.
+4. Otras cuentas existentes: las nuevas políticas las bloquearían. No las borrarían, pero sus usuarios perderían acceso a sus QR.
+5. Resolução pública: resolve_qr debe permanecer separada del control administrativo para no romper los QR.
+
+No modifiqué archivos ni ejecuté SQL. Este diagnóstico y propuesta cubren únicamente la seguridad de administrador; no inician la fase de negocios.
