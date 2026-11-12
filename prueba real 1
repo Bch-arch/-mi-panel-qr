@@ -1,0 +1,48 @@
+Voy a seguir el flujo desde la generación PNG/SVG hasta la URL que se codifica y comprobaré si hay alguna variable de base pública configurada. No mostraré valores del entorno y no modificaré archivos ni ejecutaré SQL.
+• Explored · 1 nonzero exit
+  └ Search localhost|nextUrl\.origin|request\.url|new URL\(|/r/|NEXT_PUBLIC_.*URL|SITE_URL|APP_URL|BASE_URL|origin in .
+    Read route.ts
+    Read route.ts
+## Diagnóstico
+
+El enlace codificado se construye al descargar el PNG o SVG, en app/api/qr/[id]/download/route.ts (app/api/qr/[id]/download/route.ts:37):
+
+const target = new URL(`/r/${data.code}`, request.nextUrl.origin).toString();
+
+No encontré una URL base pública configurada. El código usa el origen de la petición que llega al endpoint. No tiene localhost hardcodeado, pero si descargas el QR mientras accedes a la aplicación en http://localhost:3000, ese origen se incorpora al QR. Eso explica lo que ocurre al escanearlo con el iPhone.
+
+En producción, la URL dependería del host que llegue a Next.js. Si un proxy o despliegue presenta un origen interno, también podría generar una URL incorrecta.
+
+## Compatibilidad con resolve_qr(text)
+
+La URL se compone como:
+
+<origen>/r/<code>
+
+La ruta /r/[slug] envía <code> al RPC como p_slug. resolve_qr(text) busca ese código y devuelve el destino si está activo. Cambiar el origen público no requiere modificar el RPC ni el SQL; el endpoint y el argumento permanecen iguales. El dominio configurado sí debe servir esta misma aplicación y exponer /r/[code].
+
+Los QR que ya descargaste contienen una URL absoluta inmutable. Cambiar la configuración no los corregirá: habrá que volver a descargarlos y reimprimirlos. El código corto guardado en la base de datos puede mantenerse igual.
+
+## Solución propuesta
+
+Usar una variable de entorno solo de servidor, por ejemplo QR_PUBLIC_BASE_URL, al generar la imagen. El handler construiría el QR desde esa base configurada y dejaría de derivarla de request.nextUrl.origin.
+
+Ejemplos:
+
+# Desarrollo desde un iPhone en la misma red
+QR_PUBLIC_BASE_URL=http://192.168.1.25:3000
+
+# Producción
+QR_PUBLIC_BASE_URL=https://qr.tudominio.com
+
+Para el acceso desde un iPhone en la red local, Next.js puede escuchar en todas las interfaces con:
+
+npm run dev -- --hostname 0.0.0.0
+
+El iPhone debe usar la IP LAN del equipo, no localhost, y ambos deben estar en una red que permita el acceso. Un túnel HTTPS también sirve para pruebas externas.
+
+En producción, configuraría la variable en el entorno del despliegue con el dominio HTTPS público. Recomiendo que el servidor valide el valor y falle en vez de generar un QR si falta, no es HTTP(S), o en producción apunta a localhost, 127.0.0.1, ::1 o un host .localhost. Esto evita emitir nuevos QR de producción rotos.
+
+El valor debería ser solo el origen —sin ruta, query ni fragmento— para que la aplicación añada /r/<code> de forma predecible.
+
+No modifiqué archivos ni ejecuté SQL. Esta es una propuesta; para incorporarla habría que modificar la ruta de descarga, documentar la variable de entorno y validar el comportamiento en desarrollo y producción.
