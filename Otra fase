@@ -1,0 +1,83 @@
+Prepararé listas operativas para revisar Supabase y ejecutar pruebas sin tocar producción. Para que los nombres de las secciones del panel estén actualizados, consultaré la documentación oficial de Supabase; no ejecutaré consultas ni haré cambios.
+• Browsing the web
+• Searched the web for site:supabase.com/docs dashboard table editor RLS policies verify policy dashboard, site:supabase.com/docs row level security dashboard policies table ed…
+• Browsing the web
+• Searched the web
+## Estado de esta revisión
+
+No modifiqué archivos, no hice commits, no ejecuté SQL ni probé operaciones de borrado contra datos. La revisión previa confirmó que el repositorio contiene la política esperada, pero no confirmó que esté aplicada en el proyecto Supabase publicado.
+
+## 1. Comprobaciones manuales en Supabase
+
+Entra al proyecto correcto y revisa public.qr_codes desde Database → Table Editor. La documentación de Supabase indica que el Table Editor permite administrar tablas y muestra cómo revisar la protección de tablas con RLS. Tables and data (https://supabase.com/docs/guides/database/tables)
+
+- [ ] Confirma que estás en el proyecto y entorno que usa la aplicación publicada.
+- [ ] Abre public.qr_codes; comprueba que existen id, user_id, code, status y las demás columnas esperadas.
+- [ ] Comprueba que RLS aparece habilitado para la tabla.
+- [ ] Abre la sección o pestaña Policies de la tabla y revisa las políticas de todas las operaciones.
+- [ ] Confirma que aparece own delete con operación DELETE y la condición auth.uid() = user_id.
+- [ ] Revisa también las políticas ALL y cualquier otra política DELETE: una política permisiva adicional podría ampliar el acceso.
+- [ ] Confirma que existe una política SELECT por propietario. La acción devuelve el ID eliminado mediante select("id"), por lo que necesita poder leer esa fila.
+- [ ] Revisa los permisos de tabla para los roles anon y authenticated, si el panel los muestra. Las políticas RLS controlan filas, mientras que los privilegios controlan si un rol puede intentar la operación; son controles distintos. Row Level Security (https://supabase.com/docs/guides/database/postgres/row-level-security)
+
+No pulses controles para activar/desactivar RLS ni para editar o crear políticas. Si algo no coincide, anota lo que muestra el panel y consúltalo antes de cambiarlo.
+
+Importante: no uses el SQL Editor ni una operación en Table Editor como prueba de aislamiento. El editor puede operar con privilegios de propietario y no representar la sesión normal de un usuario; Supabase explica que el propietario de la tabla y roles con BYPASSRLS no están sujetos a las políticas. Comprueba el comportamiento con la aplicación y cuentas normales. Tables and data: securing tables (https://supabase.com/docs/guides/database/tables)
+
+## 2. Pruebas de eliminación, autenticación y aislamiento
+
+Haz estas pruebas únicamente con QR de prueba en un entorno no productivo o con registros desechables cuya eliminación hayas previsto.
+
+### Usuario propietario
+
+- [ ] Inicia sesión con la cuenta A y crea un QR de prueba.
+- [ ] Pulsa Eliminar y cancela la confirmación. El QR debe seguir en el listado y su enlace debe seguir resolviendo.
+- [ ] Vuelve a eliminarlo y confirma. Debe desaparecer del listado.
+- [ ] Abre su enlace corto: debe ir a “QR no disponible”.
+- [ ] Si repites el envío con el mismo ID, la aplicación debe responder “Código QR no encontrado”.
+
+### Usuario no autenticado
+
+- [ ] Cierra sesión e intenta abrir el panel. Debe redirigirte a /login.
+- [ ] Comprueba que no queda un formulario utilizable para borrar desde una sesión cerrada. Aunque alguien invoque directamente la Server Action, el servidor vuelve a validar la sesión con requireUser() antes de acceder a la fila.
+
+### Usuario que intenta borrar un QR ajeno
+
+- [ ] Inicia sesión con la cuenta A y crea otro QR temporal.
+- [ ] Inicia sesión con la cuenta B en otra sesión de navegador.
+- [ ] En un entorno de pruebas, intenta enviar la acción de borrado desde B con el ID del QR de A, por ejemplo modificando el valor oculto del formulario desde las herramientas del navegador.
+- [ ] La aplicación debe responder “Código QR no encontrado”.
+- [ ] Vuelve a A y confirma que el QR y el enlace siguen existiendo.
+- [ ] Como comprobaciones adicionales del aislamiento, desde B intenta abrir la URL de edición y la descarga usando el ID de A: no debe recibir los datos de A.
+
+La acción filtra por id y user_id del usuario validado; la política RLS debe imponer la misma propiedad en la base de datos. La prueba con B comprueba la aplicación integrada, pero el panel de Policies por sí solo solo confirma la definición visible, no todos los privilegios efectivos. No cambies políticas si el resultado difiere: recopila el resultado y revísalo antes de actuar.
+
+## 3. Build de Next.js con acceso a Google Fonts
+
+La forma directa de verificar el build sin cambiar fuentes es ejecutarlo en una máquina o CI con acceso a Google Fonts:
+
+npm run build
+
+La compilación anterior falló al no poder descargar Geist y Geist Mono. Next.js obtiene las fuentes Google durante el build y empaqueta los archivos como recursos de la aplicación. En un entorno con conexión, verifica que el comando termine con código de salida 0. Después puedes probar el artefacto local con:
+
+npm run start
+
+y revisar en el navegador las rutas principales con las variables de entorno configuradas localmente. No compartas los valores de esas variables.
+
+La versión instalada también contiene NEXT_FONT_GOOGLE_MOCKED_RESPONSES, una opción interna destinada a pruebas que sustituye las respuestas de Google Fonts mediante un fixture. Puede servir para probar la compilación sin red, pero exige preparar un fixture con las URL exactas y fuentes válidas; no equivale a verificar que el build obtiene las fuentes reales. No la ejecuté ni preparé fixture. Cambiar a next/font/local también evitaría la descarga, pero modificaría el uso de fuentes y requeriría autorización.
+
+## 4. Pruebas visuales locales
+
+Para una revisión manual:
+
+1. Ejecuta npm run dev con la configuración local apuntando a un entorno de Supabase de pruebas.
+2. Inicia sesión y deja un QR temporal en el listado.
+3. Abre el panel a 1280 px o más para revisar la tabla de escritorio.
+4. Cambia el viewport a 390 px para revisar las tarjetas móviles y que las acciones se ajusten sin quedar cortadas.
+5. Prueba cancelar y confirmar la ventana de eliminación en ambos tamaños.
+6. Repite la prueba de QR ajeno con dos cuentas de prueba.
+7. Comprueba que al finalizar los registros temporales esperados se hayan eliminado.
+
+El componente define una tabla visible desde md y tarjetas para anchos menores; no hay navegador automatizado instalado en el entorno de esta revisión para validar capturas o interacción visual aquí.
+
+Envíame lo que observaste en RLS y los resultados de las pruebas manuales. Esperaré esos resultados antes de proponer otra fase.
