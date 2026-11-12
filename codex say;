@@ -1,0 +1,43 @@
+Voy a hacer una nueva lectura de solo lectura del README, la documentación de docs/ y los archivos de aplicación/configuración para basar la propuesta en el estado actual. Después presentaré una fase acotada con archivos concretos, criterios verificables y dependencias; no editaré nada hasta que la autorices.
+• Ran cat README.md; find docs -maxdepth 3 -type f -print 2>/dev/null; sed -n '1,280p' docs/PROJECT_CONTEXT.md; cat package.json; cat next.config.ts; cat tsconfig.json; cat .en…
+  └ 
+    # Clave publica (publishable key), segura para el navegador. La proteccion de datos depende de RLS.
+    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
+• Explored
+  └ List app
+    Read qr.ts
+    Read route.ts
+## Propuesta: primera fase — administración personal fiable
+
+El código ya permite crear, editar, pausar, listar y descargar QR. Propongo completar el flujo cotidiano con eliminación de QR y corregir algunos puntos de seguridad y feedback que afectan ese flujo. La separación de datos por user_id y RLS se conserva; no añadiremos modelo de organizaciones ni infraestructura nueva.
+
+### Archivos que modificaría
+
+- app/actions/qr.ts: añadir una acción autenticada para eliminar un QR propio; manejar errores de actualización al cambiar su estado.
+- components/qr-table.tsx: incorporar la acción de eliminación en las vistas de escritorio y móvil.
+- components/qr-delete-button.tsx — nuevo: botón con confirmación antes de borrar.
+- app/auth/callback/route.ts: validar que next sea una ruta interna antes de redirigir.
+- app/api/qr/[id]/download/route.ts: añadir un filtro explícito por propietario a la consulta.
+- docs/PROJECT_CONTEXT.md: reflejar el cambio y las decisiones que puedan afectar a la evolución futura.
+
+No preveo cambios en dependencias, configuración de infraestructura ni esquema SQL: el archivo de esquema existente ya define una política RLS de eliminación por propietario. Falta verificar que esa política esté aplicada en Supabase.
+
+### Criterios para comprobar que funciona
+
+- El usuario puede borrar un QR propio desde escritorio y móvil; el QR desaparece del listado.
+- Cancelar la confirmación no borra el QR.
+- Después de borrarlo, su enlace público ya no redirige al destino.
+- Una sesión cerrada no puede borrar QR, y un usuario no puede borrar un QR ajeno.
+- Si falla el cambio de estado, la interfaz comunica el error en lugar de aparentar éxito.
+- El callback acepta destinos internos y redirige a una ruta segura cuando next intenta salir del sitio.
+- La descarga sigue funcionando para el propietario y no devuelve el QR de otro usuario.
+
+### Riesgos y dependencias
+
+- La protección de eliminación depende de que la política RLS del esquema exista también en la base remota.
+- No se ha confirmado la configuración de Auth ni de callbacks en Supabase.
+- No hay infraestructura de pruebas configurada. Los criterios pueden comprobarse manualmente; antes de añadir pruebas automatizadas habría que acordar su alcance.
+
+El README actual sigue siendo la plantilla de Next.js; propongo dejar su sustitución por instrucciones de puesta en marcha como una fase posterior enfocada en operación y documentación.
+
+No he modificado archivos. Si autorizas esta fase, implementaré el alcance descrito y después informaré de los cambios y de cómo se verificaron.
