@@ -1,0 +1,65 @@
+Haré una revisión de solo lectura: seguiré el recorrido de eliminación y autorización, revisaré el SQL RLS existente y las opciones locales para build y comprobación visual. No ejecutaré SQL ni tocaré archivos; tampoco haré pruebas que borren datos reales.
+• Explored
+  └ Read schema.sql
+    Read qr.ts
+    Read auth.ts
+• Ran rg -n "MOCKED|mocked|MOCK|NEXT_FONT|process\.env" node_modules/next/dist/compiled/@next/font/dist/google node_modules/next/dist/compiled/@next/font/google | head -100; rg…
+  └ .next/dev/static/chunks/[next]_internal_font_google_geist_mono_8d43a2aa_module_css_1igg3k2-ikub5._.single.css.map
+    .next/dev/static/chunks/[next]_internal_font_google_geist_mono_8d43a2aa_module_css_1igg3k2-ikub5._.single.css
+    .next/dev/static/chunks/[next]_internal_font_google_geist_a71539c9_module_css_1igg3k2-ikub5._.single.css
+• Explored
+  └ Read fetch-css-from-google-fonts.js
+    Read fetch-font-file.js
+    Read loader.js
+## 1. Eliminación y autorización
+
+La acción de eliminación requiere una sesión: deleteQr llama a requireUser(), que valida la sesión con auth.getUser() y redirige a /login si no hay usuario. Además, la consulta de borrado filtra por el ID del QR y por el ID del usuario autenticado. Si no encuentra una fila, responde “Código QR no encontrado”, sin distinguir entre un ID inexistente y uno ajeno. app/actions/qr.ts (app/actions/qr.ts:174) lib/auth.ts (lib/auth.ts:8)
+
+Por tanto, en el código actual:
+
+- Usuario no autenticado: la acción no llega al borrado; requireUser() lo redirige al login.
+- Usuario que intenta borrar un QR ajeno: el filtro por user_id excluye esa fila y la acción no la elimina.
+- Usuario propietario: la fila se elimina, se revalida el listado y el enlace público deja de resolver.
+
+La confirmación del navegador evita borrados accidentales, pero es solo una medida de interfaz; la autorización efectiva está en servidor y en la base de datos. components/qr-delete-button.tsx (components/qr-delete-button.tsx:17)
+
+## 2. RLS de eliminación
+
+En supabase/schema.sql consta que se activa RLS en qr_codes y que hay una política de eliminación own delete con la condición auth.uid() = user_id. También hay política de lectura por propietario, necesaria porque la acción devuelve el ID borrado mediante .select("id"). supabase/schema.sql (supabase/schema.sql:20)
+
+La combinación prevista es adecuada: la acción filtra por propietario y RLS vuelve a restringir la operación a ese propietario. El cliente servidor usa la clave publishable junto con las cookies de sesión; no utiliza una clave de servicio que omita RLS.
+
+Pendiente: solo pude comprobar las políticas declaradas en el archivo del repositorio. No puedo confirmar que estén aplicadas en la instancia publicada ni que su estado remoto coincida. No ejecuté SQL ni cambié políticas. Esa comprobación debe hacerse desde el panel de Supabase, revisando RLS y la política own delete.
+
+## 3. Build sin descarga de Google Fonts
+
+El build anterior falló cuando Next.js intentó descargar Geist y Geist Mono desde Google Fonts. La guía local de Next.js confirma que next/font/google obtiene los recursos durante el build y los empaqueta como assets de la aplicación.
+
+Hay dos opciones para verificar el build:
+
+1. Conservar las fuentes actuales: ejecutar el build en un entorno con acceso a Google Fonts o con el proxy de red correctamente configurado. No cambia el código ni la tipografía.
+2. Usar mocks solo para pruebas: la versión instalada de Next.js incluye NEXT_FONT_GOOGLE_MOCKED_RESPONSES, descrito por su implementación como mecanismo de pruebas. Requiere un archivo fixture temporal con respuestas CSS para las URL exactas y archivos de fuente locales válidos. Puede servir para probar la tubería de compilación sin red, pero es una interfaz interna de Next.js y no demuestra por sí sola que el build de producción descarga y empaqueta las fuentes reales.
+
+La segunda opción requeriría preparar un fixture temporal; no lo hice. Tampoco cambié fuentes ni configuración. tsc y lint ayudan a verificar tipos y estilo, pero no sustituyen un build de producción.
+
+## 4. Pruebas visuales locales
+
+No encontré Playwright ni un navegador instalado en este entorno, así que no pude hacer capturas ni interacciones visuales aquí. Para una comprobación local manual:
+
+1. Ejecutar npm run dev con una instancia de Supabase de desarrollo o pruebas.
+2. Crear QR de prueba desde la aplicación, sin usar registros que no se puedan perder.
+3. Abrir el panel en un navegador con ancho de escritorio —por ejemplo, 1280 px— y ancho móvil —por ejemplo, 390 px— usando el emulador responsive de las herramientas de desarrollo.
+4. Comprobar en ambas vistas la confirmación, cancelar y confirmar el borrado, y verificar que las acciones y mensajes de error sean visibles.
+5. Usar dos cuentas de prueba: crear un QR con la cuenta A y, desde la B, intentar enviar la acción con ese ID. La fila de A debe permanecer y B debe recibir el mensaje de no encontrado.
+6. Cerrar sesión y confirmar que el panel exige autenticación. Evitar realizar estas pruebas de borrado sobre datos publicados.
+
+Las vistas responsive están definidas en el mismo componente: tabla en md:table y tarjetas móviles en md:hidden. Las acciones se incluyen en ambas ramas. components/qr-table.tsx (components/qr-table.tsx:55)
+
+## Pendientes
+
+- Confirmar en Supabase publicado que RLS está activo y existe la política de eliminación por propietario.
+- Ejecutar las pruebas de dos usuarios contra un entorno de desarrollo o staging.
+- Repetir npm run build en un entorno con acceso a Google Fonts o preparar, por separado, el fixture temporal de mocks.
+- Hacer una comprobación visual en navegador; no se pudo hacer en esta sesión.
+
+No modifiqué archivos, no ejecuté SQL y no añadí funcionalidades.
