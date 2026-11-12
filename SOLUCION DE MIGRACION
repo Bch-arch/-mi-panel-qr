@@ -1,0 +1,56 @@
+Voy a revisar la migración local y la versión actual de main para confirmar si esa instrucción incompleta sigue presente. Corregiré solo el bloque DELETE si hace falta, revisaré sintácticamente ambas migraciones sin ejecutarlas contra Supabase y subiré el cambio sin incluir archivos ajenos.
+• Ran git status --short --branch && git log -4 --oneline --decorate && rg -n -C 5 'create policy "own delete"|drop policy|create policy "qr_codes_delete_own"|for delete' supab…
+  └ supabase/migrations/202611120001_qr_inventory_batches.sql-106-  p_codes text[]
+    origin    https://github.com/Bch-arch/-mi-panel-qr.git (fetch)
+    origin    https://github.com/Bch-arch/-mi-panel-qr.git (push)
+• Edited supabase/migrations/202611120001_qr_inventory_batches.sql (+2 -0)
++drop policy if exists "own delete" on public.qr_codes;
++
+• Ran sed -n '92,110p' supabase/migrations/202611120001_qr_inventory_batches.sql && sed -n '1,30p' supabase/migrations/202611120002_qr_codes_delete_own_batch_guard.sql && comma…
+  └  create policy "qr_codes_delete_own" on public.qr_codes
+       for delete using (auth.uid() = user_id and batch_id is null);
+     
+• Ran python3 -c 'import importlib.util; print("sqlparse", bool(importlib.util.find_spec("sqlparse")))' && git status --short --branch && git rev-list --left-right --count orig…
+  └ ?? AGENTS.md
+    ?? docs/PROJECT_CONTEXT.md
+    0    0
+El bloque de la primera migración ahora coincide con el solicitado: elimina ambos nombres posibles y crea solo qr_codes_delete_own con filtro de propietario y batch_id IS NULL. La segunda migración ya tenía esa misma secuencia. No hay psql ni parser PostgreSQL instalado localmente, así que la comprobación de sintaxis será estática (estructura y sentencias), sin ejecutar SQL contra una base. Verificaré main y publicaré únicamente la migración corregida.
+You approved codex to run git fetch origin main && git diff --check && git rev-list --left-right --coun... this time
+• Ran git fetch origin main && git diff --check && git rev-list --left-right --count origin/main...HEAD && rg -n '^\$\$|^begin$|^end;|^drop policy|^create policy|for delete usi…
+  └ supabase/migrations/202611120001_qr_inventory_batches.sql:119:begin
+    supabase/migrations/202611120001_qr_inventory_batches.sql:167:end;
+    supabase/migrations/202611120001_qr_inventory_batches.sql:168:$$;
+• Ran git log -3 --oneline --decorate origin/main && git show --stat --oneline origin/main && git diff origin/main -- supabase/migrations/202611120001_qr_inventory_batches.sql
+  └  create policy "qr_codes_delete_own" on public.qr_codes
+       for delete using (auth.uid() = user_id and batch_id is null);
+     
+You approved codex to run git add -- supabase/migrations/202611120001_qr_inventory_batches.sql && git d... this time
+• Ran git add -- supabase/migrations/202611120001_qr_inventory_batches.sql && git diff --cached --check && git diff --cached --stat && git diff --cached -- supabase/migrations/…
+  └ [master 8b19bdf] Remove stale QR batch delete policy
+     1 file changed, 2 insertions(+)
+    8b19bdf Remove stale QR batch delete policy
+La corrección local ya está en un commit de un archivo. main avanzó con un informe mientras trabajaba; voy a reaplicar el commit encima de esa actualización y después subirlo como fast-forward, preservando el resto del checkout.
+You approved codex to run git rebase --autostash origin/main this time
+• Ran git rebase --autostash origin/main
+  └ Created autostash: c9af103
+    Rebasing (1/1)
+    
+You approved codex to run git log -1 --oneline && git rev-list --left-right --count origin/main...HEAD ... this time
+• Ran git log -1 --oneline && git rev-list --left-right --count origin/main...HEAD && git push origin HEAD:main
+  └ 0    1
+    To https://github.com/Bch-arch/-mi-panel-qr.git
+       1ae679d..d181740  HEAD -> main
+You approved codex to run git fetch origin main && git log -1 --oneline origin/main && git show 'origin... this time
+• Ran git fetch origin main && git log -1 --oneline origin/main && git show 'origin/main:supabase/migrations/202611120001_qr_inventory_batches.sql' | sed -n '96,106p' && git sh…
+  └  D "pruebas supabase"
+    ?? AGENTS.md
+    ?? docs/PROJECT_CONTEXT.md
+La versión corregida ya está en main como d181740, y confirmé el bloque publicado en las dos migraciones. Para completar la comprobación de sintaxis de los archivos enteros, voy a usar un parser PostgreSQL temporal fuera del repositorio; no ejecuta ni modifica la base de datos.
+You approved codex to run python3 -m pip install --quiet --target /tmp/codex-pglast pglast this time
+• Exited (status 1) python3 -m pip install --quiet --target /tmp/codex-pglast pglast
+  └ /usr/bin/python3: No module named pip
+Actualicé la migración 001 para que elimine "own delete" y qr_codes_delete_own, y luego cree únicamente qr_codes_delete_own con auth.uid() = user_id AND batch_id IS NULL. La migración 002 ya tenía el mismo bloque, así que no la cambié. git diff --check pasó.
+
+Revisé estáticamente ambas migraciones. No hay un parser PostgreSQL local disponible; no ejecuté SQL ni modifiqué datos en Supabase.
+
+La corrección está en main como commit d181740: ver en GitHub (https://github.com/Bch-arch/-mi-panel-qr/commit/d181740).
