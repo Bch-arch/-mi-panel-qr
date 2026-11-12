@@ -1,0 +1,108 @@
+No modifiqué supabase/schema.sql ni apliqué cambios. Este es el SQL propuesto, preparado para fallar sin cambiar nada si alguno de los objetos principales ya existe. No contiene DROP ni CREATE OR REPLACE.
+
+begin;
+
+create table public.qr_codes (
+  id uuid primary key default pg_catalog.gen_random_uuid(),
+  user_id uuid not null default auth.uid()
+    references auth.users(id) on delete cascade,
+  name text not null,
+  destination text not null,
+  code text not null unique,
+  status text not null default 'activo'
+    check (status in ('activo', 'pausado', 'borrador')),
+  scans integer not null default 0,
+  created_at timestamptz not null default pg_catalog.now(),
+  updated_at timestamptz not null default pg_catalog.now()
+);
+
+create index qr_codes_user_id_idx
+  on public.qr_codes (user_id);
+
+alter table public.qr_codes enable row level security;
+
+revoke all on table public.qr_codes
+  from public, anon, authenticated, service_role;
+
+grant select, insert, update, delete on table public.qr_codes
+  to authenticated;
+
+create policy qr_codes_select_own
+  on public.qr_codes
+  for select
+  to authenticated
+  using ((select auth.uid()) = user_id);
+
+create policy qr_codes_insert_own
+  on public.qr_codes
+  for insert
+  to authenticated
+  with check ((select auth.uid()) = user_id);
+
+create policy qr_codes_update_own
+  on public.qr_codes
+  for update
+  to authenticated
+  using ((select auth.uid()) = user_id)
+  with check ((select auth.uid()) = user_id);
+
+create policy qr_codes_delete_own
+  on public.qr_codes
+  for delete
+  to authenticated
+  using ((select auth.uid()) = user_id);
+
+create function public.resolve_qr(p_slug text)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $function$
+declare
+  v_destination text;
+begin
+  update public.qr_codes
+     set scans = scans + 1,
+         updated_at = pg_catalog.now()
+   where code = p_slug
+     and status = 'activo'
+  returning destination into v_destination;
+
+  return v_destination;
+end;
+$function$;
+
+revoke all on function public.resolve_qr(text)
+  from public, anon, authenticated, service_role;
+
+grant execute on function public.resolve_qr(text)
+  to anon, authenticated;
+
+commit;
+
+## Efectos y permisos
+
+- Crea solo public.qr_codes y el índice qr_codes_user_id_idx.
+- Activa RLS y crea políticas específicas para authenticated, limitadas al user_id de la sesión.
+- Concede a authenticated los permisos de tabla necesarios para listar, crear, actualizar y eliminar sus QR. RLS limita las filas que puede afectar.
+- No concede acceso directo a la tabla a anon, PUBLIC ni service_role.
+- Concede a anon y authenticated únicamente ejecución de resolve_qr. La función actualiza el contador y devuelve el destino cuando el QR está activo.
+- La función usa SECURITY DEFINER porque los escaneos anónimos deben actualizar el contador sin dar a anon permiso directo sobre la tabla. search_path vacío y referencias calificadas reducen el riesgo de que otros objetos cambien cómo se resuelve la función.
+- La relación con auth.users conserva el borrado en cascada: eliminar una cuenta de Auth elimina sus QR.
+- No modifica ni consulta public.employees, otras tablas, ni políticas ajenas a QR.
+
+Revocar acceso a service_role es una elección restrictiva para esta tabla nueva. Si en el futuro se decide que algún servicio confiable necesita operar con QR mediante esa clave, habría que concederle permisos específicos entonces. La sesión administrativa que crea la tabla conserva sus privilegios de propietario.
+
+## Orden y supuestos
+
+El orden es: tabla → índice → RLS → permisos de tabla → políticas → función → permisos de función. Se presupone que el proyecto Supabase proporciona auth.users, auth.uid(), y los roles anon, authenticated y service_role; también que la versión de PostgreSQL dispone de pg_catalog.gen_random_uuid().
+
+El BEGIN/COMMIT busca que los cambios del bloque se apliquen juntos. Si una instrucción falla, no se debe continuar con un bloque parcial: hay que confirmar que la transacción quedó revertida antes de reintentar.
+
+La propuesta no usa IF NOT EXISTS: si aparece una tabla, índice, política o función con conflicto, la ejecución falla en vez de aceptar silenciosamente una definición posiblemente distinta o reemplazarla. Aunque confirmaste que no existen qr_codes ni resolve_qr(text), antes de aplicarlo conviene revisar en el Dashboard si ya existe el índice o alguna política con los nombres propuestos. No pude comprobar esos objetos remotos.
+
+## Riesgo residual
+
+La función es pública deliberadamente para que un escaneo sin sesión pueda resolver un QR. Quien conozca el código de un QR activo podrá obtener su destino e incrementar su contador con llamadas repetidas. Eso coincide con el flujo de escaneo actual, pero los contadores no deben considerarse resistentes a abuso sin controles adicionales.
+
+El siguiente paso sería revisar esta propuesta y confirmar la política de permisos de service_role, el propietario con el que se crearía la función y la ausencia de colisiones de nombres. Solo después de tu aprobación debería guardarse como migración o ejecutarse.
