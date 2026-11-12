@@ -1,0 +1,177 @@
+No guardé este SQL en un archivo ni lo ejecuté. El bloque está diseñado para actuar solo sobre public.qr_codes y public.resolve_qr(text). No contiene DROP, CREATE OR REPLACE ni sentencias sobre public.employees.
+
+## SQL propuesto
+
+Ejecuta este bloque completo como una sola operación. Está pensado para fallar, sin sustituir objetos, si aparece un conflicto de nombres.
+
+begin;
+
+create table public.qr_codes (
+  id uuid primary key default pg_catalog.gen_random_uuid(),
+  user_id uuid not null default auth.uid()
+    references auth.users(id) on delete cascade,
+  name text not null,
+  destination text not null,
+  code text not null unique,
+  status text not null default 'activo'
+    check (status in ('activo', 'pausado', 'borrador')),
+  scans integer not null default 0,
+  created_at timestamptz not null default pg_catalog.now(),
+  updated_at timestamptz not null default pg_catalog.now()
+);
+
+create index qr_codes_user_id_idx
+  on public.qr_codes (user_id);
+
+alter table public.qr_codes enable row level security;
+
+revoke all privileges on table public.qr_codes
+  from public, anon, authenticated, service_role;
+
+grant select, insert, update, delete on table public.qr_codes
+  to authenticated;
+
+create policy qr_codes_select_own
+  on public.qr_codes
+  for select
+  to authenticated
+  using ((select auth.uid()) = user_id);
+
+create policy qr_codes_insert_own
+  on public.qr_codes
+  for insert
+  to authenticated
+  with check ((select auth.uid()) = user_id);
+
+create policy qr_codes_update_own
+  on public.qr_codes
+  for update
+  to authenticated
+  using ((select auth.uid()) = user_id)
+  with check ((select auth.uid()) = user_id);
+
+create policy qr_codes_delete_own
+  on public.qr_codes
+  for delete
+  to authenticated
+  using ((select auth.uid()) = user_id);
+
+create function public.resolve_qr(p_slug text)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $function$
+declare
+  v_destination text;
+begin
+  update public.qr_codes
+     set scans = scans + 1,
+         updated_at = pg_catalog.now()
+   where code = p_slug
+     and status = 'activo'
+  returning destination into v_destination;
+
+  return v_destination;
+end;
+$function$;
+
+revoke all privileges on function public.resolve_qr(text)
+  from public, anon, authenticated, service_role;
+
+grant execute on function public.resolve_qr(text)
+  to anon, authenticated;
+
+commit;
+
+## Efectos y permisos
+
+- Crea la tabla y el índice necesarios. user_id referencia auth.users; borrar una cuenta de Auth borraría también sus QR por la regla ON DELETE CASCADE.
+- Activa RLS. authenticated recibe permisos de lectura, inserción, actualización y eliminación, pero las políticas limitan cada operación a filas cuyo user_id coincide con auth.uid().
+- anon no recibe acceso directo a la tabla.
+- resolve_qr se ejecuta con los privilegios de su propietario para poder incrementar scans sin conceder escritura directa a visitantes anónimos. El código de la función solo actualiza el QR activo cuyo code coincide y devuelve su destino.
+- anon y authenticated reciben únicamente permiso de ejecución del RPC. La función permite resolver destinos públicos y cada llamada válida incrementa el contador.
+- Se revocan permisos de tabla de service_role sobre esta tabla nueva. El código actual no usa esa clave; si un proceso futuro necesita acceder directamente a QR mediante service_role, habría que concederle permisos expresos.
+
+El bloque asume que PostgreSQL ofrece pg_catalog.gen_random_uuid() y que el proyecto conserva los roles Supabase habituales. Confirmaste que anon y authenticated tienen USAGE en public.
+
+## Comprobaciones posteriores
+
+Ejecuta estas consultas de solo lectura después del bloque, por separado.
+
+Tabla y RLS:
+
+select
+  c.relname as table_name,
+  c.relrowsecurity as rls_enabled
+from pg_catalog.pg_class c
+join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public'
+  and c.relname = 'qr_codes';
+
+Resultado esperado: una fila con rls_enabled = true.
+
+Columnas:
+
+select column_name, data_type, is_nullable, column_default
+from information_schema.columns
+where table_schema = 'public'
+  and table_name = 'qr_codes'
+order by ordinal_position;
+
+Resultado esperado: las columnas id, user_id, name, destination, code, status, scans, created_at y updated_at.
+
+Políticas:
+
+select policyname, cmd, roles, qual, with_check
+from pg_catalog.pg_policies
+where schemaname = 'public'
+  and tablename = 'qr_codes'
+order by policyname;
+
+Resultado esperado: cuatro políticas (SELECT, INSERT, UPDATE, DELETE), todas destinadas a authenticated y con condición de propiedad.
+
+Permisos de tabla:
+
+select
+  has_table_privilege('anon', 'public.qr_codes', 'select') as anon_select,
+  has_table_privilege('anon', 'public.qr_codes', 'insert') as anon_insert,
+  has_table_privilege('anon', 'public.qr_codes', 'update') as anon_update,
+  has_table_privilege('anon', 'public.qr_codes', 'delete') as anon_delete,
+  has_table_privilege('authenticated', 'public.qr_codes', 'select') as authenticated_select,
+  has_table_privilege('authenticated', 'public.qr_codes', 'insert') as authenticated_insert,
+  has_table_privilege('authenticated', 'public.qr_codes', 'update') as authenticated_update,
+  has_table_privilege('authenticated', 'public.qr_codes', 'delete') as authenticated_delete,
+  has_table_privilege('service_role', 'public.qr_codes', 'select') as service_role_select;
+
+Resultado esperado: los cuatro valores de anon en false; los cuatro de authenticated en true; y service_role_select en false.
+
+Función y permisos:
+
+select
+  p.oid::regprocedure as function_signature,
+  p.prosecdef as security_definer,
+  p.proconfig as function_settings,
+  pg_catalog.pg_get_userbyid(p.proowner) as function_owner,
+  has_function_privilege('anon', p.oid, 'EXECUTE') as anon_can_execute,
+  has_function_privilege('authenticated', p.oid, 'EXECUTE') as authenticated_can_execute,
+  has_function_privilege('service_role', p.oid, 'EXECUTE') as service_role_can_execute
+from pg_catalog.pg_proc p
+join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public'
+  and p.proname = 'resolve_qr'
+  and p.oid = pg_catalog.to_regprocedure('public.resolve_qr(text)');
+
+Resultado esperado: firma public.resolve_qr(text), security_definer = true, ejecución permitida a anon y authenticated, denegada a service_role; function_settings debe incluir el search_path vacío.
+
+El SQL Editor puede operar con privilegios de propietario y no sirve para demostrar el aislamiento RLS como usuario normal. Después de verificar los metadatos, comprueba el comportamiento desde la aplicación con dos cuentas de prueba: cada una debe ver y modificar solo sus QR; un escaneo sin sesión debe resolver un QR activo.
+
+## Ejecución segura desde SQL Editor
+
+1. Confirma otra vez que el selector del Dashboard muestra el proyecto correcto.
+2. Pega el bloque DDL completo y ejecútalo una sola vez como unidad.
+3. Si falla una instrucción, no ejecutes el resto por separado ni vuelvas a pegarlo a ciegas. Revisa que la transacción haya quedado revertida y que el error no indique una colisión u otra diferencia del proyecto.
+4. Si termina correctamente, ejecuta las consultas de comprobación anteriores.
+5. No vuelvas a ejecutar el bloque DDL como método de verificación: es intencionalmente de una sola aplicación y fallará si los objetos ya existen.
+
+No debe alterar public.employees; todas las sentencias DDL, permisos y políticas apuntan a los objetos QR indicados.
